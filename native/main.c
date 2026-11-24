@@ -391,7 +391,7 @@ static void vendor_transfer(int percent, const WCHAR *text) {
 
 static HRESULT download_selected(const Task *task) {
     HRESULT outcome = S_OK;
-    int successful = 0, submitted_count = 0, failed = 0;
+    int successful = 0, downloaded_count = 0, submitted_count = 0, failed = 0;
     BOOL needs_install = FALSE;
     for (int i = 0; i < task->count; ++i) {
         const VendorPackage *package = selected_package(task->indices[i]);
@@ -414,6 +414,7 @@ static HRESULT download_selected(const Task *task) {
         HRESULT hr = vendor_download_package(package, task->folder, should_cancel,
             vendor_transfer, saved, ARRAYSIZE(saved));
         log_update_result(L"厂商直连下载与 SHA-256 校验", hr);
+        if (SUCCEEDED(hr)) ++downloaded_count;
         BOOL submitted = FALSE;
         if (SUCCEEDED(hr) && install && !should_cancel()) {
             emit(EV_ITEM_STATUS, index, L"正在解压已校验驱动包", NULL);
@@ -447,7 +448,7 @@ static HRESULT download_selected(const Task *task) {
     }
     WCHAR text[1024];
     StringCchPrintfW(text, ARRAYSIZE(text), L"%s下载校验完成 %d 项，已提交匹配安装 %d 项，失败或取消 %d 项，未执行 %d 项。%s",
-        should_cancel() ? L"任务已取消。" : L"任务结束。", successful, submitted_count, failed,
+        should_cancel() ? L"任务已取消。" : L"任务结束。", downloaded_count, submitted_count, failed,
         task->count - successful - failed, reboot ? L"系统要求重启，请保存工作后手动重启。" :
         L"整机 EXE 包仅保存，不自动运行；安装详情见下载目录日志。");
     emit(EV_STATUS, 0, text, NULL);
