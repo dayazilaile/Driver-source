@@ -4,7 +4,7 @@
 #define _UNICODE
 #define COBJMACROS
 #define INITGUID
-#define _WIN32_WINNT 0x0601
+#define _WIN32_WINNT 0x0A00
 #include <windows.h>
 #include <commctrl.h>
 #include <setupapi.h>
@@ -18,8 +18,10 @@
 #include <strsafe.h>
 #include <stdlib.h>
 #include <wchar.h>
+#include <winhttp.h>
+#include "sources.h"
 
-#define APP_VERSION L"0.1.1"
+#define APP_VERSION L"0.1.2"
 /* IID from the Windows SDK, also usable with MinGW's base wuapi.h. */
 static const GUID driver_update_iid = {0xb383cd1a, 0x5ce9, 0x4504, {0x9f,0x63,0x76,0x4b,0x12,0x36,0xf1,0x91}};
 #define MAX_UPDATES 2048
@@ -32,16 +34,19 @@ static const GUID driver_update_iid = {0xb383cd1a, 0x5ce9, 0x4504, {0x9f,0x63,0x
 #define ID_ALL 106
 #define ID_COPY 107
 #define ID_TAB 108
+#define ID_AUTO_INSTALL 109
+#define ID_CHECK_SOURCES 110
+#define ID_OPEN_SOURCE 111
 
 typedef enum { EV_STATUS, EV_HARDWARE, EV_UPDATE, EV_RESET, EV_PROGRESS,
-               EV_ITEM_STATUS, EV_DONE, EV_EXIT } EventKind;
+               EV_ITEM_STATUS, EV_INSTALLED, EV_SOURCE_STATUS, EV_DONE, EV_EXIT } EventKind;
 typedef struct {
     WCHAR name[512], hardware[2048], version[128], state[128];
 } Hardware;
 typedef struct {
     WCHAR title[512], hardware[1024], provider[256];
     WCHAR *eula;
-    BOOL accepted;
+    BOOL accepted, installed;
     int index;
 } Candidate;
 typedef struct {
@@ -52,12 +57,14 @@ typedef struct {
 } Event;
 typedef struct {
     int command, source, count, indices[MAX_UPDATES];
+    BOOL install;
     WCHAR folder[MAX_PATH];
 } Task;
 
 static HWND main_window, hardware_list, update_list, status_label, progress_bar;
 static HWND scan_button, download_button, cancel_button, source_box, folder_edit;
 static HWND tab_control, folder_button, open_button, all_button, copy_button;
+static HWND auto_install_box, source_list, check_sources_button, open_source_button;
 static HFONT ui_font;
 static HANDLE task_event, worker_handle;
 static CRITICAL_SECTION task_lock;
@@ -296,6 +303,19 @@ static HRESULT export_update(IUpdate *update, const WCHAR *folder, WCHAR *saved,
     return hr;
 }
 
+static HRESULT single_update_collection(IUpdate *update, IUpdateCollection **selection) {
+    CLSID collection_class;
+    LONG added;
+    HRESULT hr = CLSIDFromProgID(L"Microsoft.Update.UpdateColl", &collection_class);
+    if (FAILED(hr)) return hr;
+    hr = CoCreateInstance(&collection_class, NULL, CLSCTX_INPROC_SERVER,
+                          &IID_IUpdateCollection, (void **)selection);
+    if (FAILED(hr)) return hr;
+    hr = IUpdateCollection_Add(*selection, update, &added);
+    if (FAILED(hr)) { IUpdateCollection_Release(*selection); *selection = NULL; }
+    return hr;
+}
+
 static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
     IUpdateCollection *selection = NULL;
     IUpdateDownloader *downloader = NULL;
@@ -304,7 +324,6 @@ static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
     VARIANT state;
     VARIANT_BOOL complete = VARIANT_FALSE, accepted = VARIANT_FALSE, downloaded = VARIANT_FALSE;
     OperationResultCode result_code = orcNotStarted;
-    LONG added;
     BOOL abort_sent = FALSE;
     HRESULT hr;
     VariantInit(&state);
@@ -315,13 +334,7 @@ static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
         hr = IUpdate_AcceptEula(update);
         if (FAILED(hr)) goto done;
     }
-    CLSID collection_class;
-    hr = CLSIDFromProgID(L"Microsoft.Update.UpdateColl", &collection_class);
-    if (FAILED(hr)) goto done;
-    hr = CoCreateInstance(&collection_class, NULL, CLSCTX_INPROC_SERVER,
-                          &IID_IUpdateCollection, (void **)&selection);
-    if (FAILED(hr)) goto done;
-    hr = IUpdateCollection_Add(selection, update, &added);
+    hr = single_update_collection(update, &selection);
     if (FAILED(hr)) goto done;
     hr = IUpdateSession_CreateUpdateDownloader(session, &downloader);
     if (FAILED(hr)) goto done;
@@ -370,38 +383,192 @@ done:
     return hr;
 }
 
+static HRESULT quiet_installer(IUpdateInstaller *installer) {
+    static const GUID installer2_iid = {0x3442d4fe,0x224d,0x4cee,{0x98,0xcf,0x30,0xe0,0xc4,0xd2,0x29,0xe6}};
+    IDispatch *dispatch = NULL;
+    WCHAR *property = L"ForceQuiet";
+    DISPID id, named = DISPID_PROPERTYPUT;
+    VARIANTARG value;
+    VariantInit(&value);
+    value.vt = VT_BOOL;
+    value.boolVal = VARIANT_TRUE;
+    DISPPARAMS args = { .rgvarg = &value, .rgdispidNamedArgs = &named, .cArgs = 1, .cNamedArgs = 1 };
+    HRESULT hr = IUpdateInstaller_QueryInterface(installer, &installer2_iid, (void **)&dispatch);
+    if (FAILED(hr)) return hr;
+    hr = IDispatch_GetIDsOfNames(dispatch, &IID_NULL, &property, 1, LOCALE_USER_DEFAULT, &id);
+    if (SUCCEEDED(hr))
+        hr = IDispatch_Invoke(dispatch, id, &IID_NULL, LOCALE_USER_DEFAULT,
+                              DISPATCH_PROPERTYPUT, &args, NULL, NULL, NULL);
+    IDispatch_Release(dispatch);
+    return hr;
+}
+
+static HRESULT install_one(IUpdateSession *session, IUpdate *update, BOOL *reboot) {
+    IUpdateCollection *selection = NULL;
+    IUpdateInstaller *installer = NULL;
+    IInstallationJob *job = NULL;
+    IInstallationResult *result = NULL;
+    IUpdateInstallationResult *item_result = NULL;
+    VARIANT state;
+    VARIANT_BOOL complete = VARIANT_FALSE, restart = VARIANT_FALSE;
+    OperationResultCode code = orcNotStarted;
+    BOOL abort_sent = FALSE;
+    HRESULT hr = single_update_collection(update, &selection);
+    VariantInit(&state);
+    *reboot = FALSE;
+    if (FAILED(hr)) goto done;
+    hr = IUpdateSession_CreateUpdateInstaller(session, &installer);
+    if (FAILED(hr)) goto done;
+    hr = IUpdateInstaller_put_Updates(installer, selection);
+    if (FAILED(hr)) goto done;
+    hr = IUpdateInstaller_get_RebootRequiredBeforeInstallation(installer, &restart);
+    if (FAILED(hr)) goto done;
+    if (restart) {
+        *reboot = TRUE;
+        hr = HRESULT_FROM_WIN32(ERROR_SUCCESS_REBOOT_REQUIRED);
+        goto done;
+    }
+    hr = IUpdateInstaller_put_AllowSourcePrompts(installer, VARIANT_FALSE);
+    if (FAILED(hr)) goto done;
+    hr = quiet_installer(installer);
+    if (FAILED(hr)) goto done;
+    if (should_cancel()) { hr = HRESULT_FROM_WIN32(ERROR_CANCELLED); goto done; }
+    hr = IUpdateInstaller_BeginInstall(installer, NULL, NULL, state, &job);
+    if (FAILED(hr)) goto done;
+    while (!complete) {
+        if (should_cancel() && !abort_sent) {
+            IInstallationJob_RequestAbort(job);
+            abort_sent = TRUE;
+        }
+        hr = IInstallationJob_get_IsCompleted(job, &complete);
+        if (FAILED(hr)) { IInstallationJob_RequestAbort(job); goto done; }
+        IInstallationProgress *progress = NULL;
+        if (SUCCEEDED(IInstallationJob_GetProgress(job, &progress))) {
+            LONG percent = 0;
+            if (SUCCEEDED(IInstallationProgress_get_PercentComplete(progress, &percent)))
+                emit(EV_PROGRESS, percent, NULL, NULL);
+            IInstallationProgress_Release(progress);
+        }
+        if (!complete) Sleep(200);
+    }
+    hr = IUpdateInstaller_EndInstall(installer, job, &result);
+    if (FAILED(hr)) goto done;
+    hr = IInstallationResult_get_RebootRequired(result, &restart);
+    if (FAILED(hr)) goto done;
+    *reboot = restart != VARIANT_FALSE;
+    hr = IInstallationResult_GetUpdateResult(result, 0, &item_result);
+    if (FAILED(hr)) goto done;
+    hr = IUpdateInstallationResult_get_ResultCode(item_result, &code);
+    if (FAILED(hr)) goto done;
+    if (code != orcSucceeded) {
+        LONG item_error = 0;
+        IUpdateInstallationResult_get_HResult(item_result, &item_error);
+        hr = FAILED((HRESULT)item_error) ? (HRESULT)item_error :
+             code == orcAborted ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : E_FAIL;
+    }
+    /* Read the actual result even after cancellation, an install may have completed. */
+done:
+    if (item_result) IUpdateInstallationResult_Release(item_result);
+    if (job) { IInstallationJob_CleanUp(job); IInstallationJob_Release(job); }
+    if (result) IInstallationResult_Release(result);
+    if (installer) IUpdateInstaller_Release(installer);
+    if (selection) IUpdateCollection_Release(selection);
+    return hr;
+}
+
 static void download_selected(IUpdateSession *session, IUpdateCollection *updates, const Task *task) {
-    int successful = 0, failed = 0;
-    for (int item = 0; item < task->count && !should_cancel(); ++item) {
+    int successful = 0, failed = 0, export_failed = 0;
+    BOOL reboot = FALSE;
+    for (int item = 0; item < task->count && !should_cancel() && !reboot; ++item) {
         IUpdate *update = NULL;
         WCHAR text[1024], saved[MAX_PATH];
         int index = task->indices[item];
-        StringCchPrintfW(text, ARRAYSIZE(text), L"正在下载第 %d / %d 项。来源由所选 Windows 更新服务决定。", item + 1, task->count);
+        StringCchPrintfW(text, ARRAYSIZE(text), L"正在处理第 %d / %d 项。来源由所选 Windows 更新服务决定。", item + 1, task->count);
         emit(EV_STATUS, 0, text, NULL);
+        emit(EV_PROGRESS, 0, NULL, NULL);
         emit(EV_ITEM_STATUS, index, L"下载中", NULL);
         HRESULT hr = IUpdateCollection_get_Item(updates, index, &update);
+        HRESULT backup = S_OK;
         if (SUCCEEDED(hr)) hr = download_one(session, update);
         if (SUCCEEDED(hr)) {
             emit(EV_ITEM_STATUS, index, L"正在保存", NULL);
-            hr = export_update(update, task->folder, saved, ARRAYSIZE(saved));
+            backup = export_update(update, task->folder, saved, ARRAYSIZE(saved));
+            if (FAILED(backup)) ++export_failed;
+            if (!task->install) hr = backup;
+        }
+        if (SUCCEEDED(hr) && task->install) {
+            if (should_cancel()) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+            else {
+                emit(EV_ITEM_STATUS, index, L"正在安装", NULL);
+                emit(EV_PROGRESS, 0, NULL, NULL);
+                hr = install_one(session, update, &reboot);
+            }
         }
         if (update) IUpdate_Release(update);
         if (SUCCEEDED(hr)) {
             ++successful;
-            emit(EV_ITEM_STATUS, index, L"已保存", NULL);
+            const WCHAR *outcome = task->install ?
+                reboot ? L"已安装，需要重启" :
+                FAILED(backup) ? L"已安装，备份失败" : L"已安装" : L"已保存";
+            emit(task->install ? EV_INSTALLED : EV_ITEM_STATUS, index, outcome, NULL);
         } else {
             ++failed;
             StringCchPrintfW(text, ARRAYSIZE(text), L"%s 0x%08lX",
-                            should_cancel() ? L"已取消" : L"失败", (unsigned long)hr);
+                            reboot ? L"需先重启" : should_cancel() ? L"已取消" : L"失败", (unsigned long)hr);
             emit(EV_ITEM_STATUS, index, text, NULL);
         }
     }
     WCHAR text[1024];
     StringCchPrintfW(text, ARRAYSIZE(text),
-        L"%s 已保存 %d 项，失败或取消 %d 项，未执行 %d 项。可在列表查看各项结果。",
-        should_cancel() ? L"任务已取消。" : L"下载任务结束。",
-        successful, failed, task->count - successful - failed);
+        L"%s %s %d 项，失败或取消 %d 项，未执行 %d 项，备份失败 %d 项。%s",
+        should_cancel() ? L"任务已取消。" : L"任务结束。",
+        task->install ? L"已安装" : L"已保存", successful, failed,
+        task->count - successful - failed, export_failed,
+        reboot ? L"Windows 要求重启，请保存工作后手动重启，再重新扫描。" : L"可在列表查看每项结果。");
     emit(EV_STATUS, 0, text, NULL);
+}
+
+static void check_sources(void) {
+    HINTERNET session = WinHttpOpen(L"DriverSource/" APP_VERSION,
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) { report_error(L"初始化来源检查", HRESULT_FROM_WIN32(GetLastError())); return; }
+    WinHttpSetTimeouts(session, 5000, 5000, 5000, 5000);
+    for (int index = 0; index < (int)ARRAYSIZE(driver_sources) && !should_cancel(); ++index) {
+        WCHAR host[256] = L"", path[2048] = L"", extra[1024] = L"", target[3072], status[128];
+        URL_COMPONENTS url = { .dwStructSize = sizeof(url), .lpszHostName = host,
+            .dwHostNameLength = ARRAYSIZE(host), .lpszUrlPath = path, .dwUrlPathLength = ARRAYSIZE(path),
+            .lpszExtraInfo = extra, .dwExtraInfoLength = ARRAYSIZE(extra) };
+        HINTERNET connection = NULL, request = NULL;
+        DWORD error = ERROR_SUCCESS, http_status = 0, size = sizeof(http_status);
+        emit(EV_SOURCE_STATUS, index, L"检查中", NULL);
+        if (!WinHttpCrackUrl(driver_sources[index].url, 0, 0, &url)) error = GetLastError();
+        if (!error) {
+            connection = WinHttpConnect(session, host, url.nPort, 0);
+            if (!connection) error = GetLastError();
+        }
+        if (!error && FAILED(StringCchPrintfW(target, ARRAYSIZE(target), L"%s%s", path, extra)))
+            error = ERROR_INSUFFICIENT_BUFFER;
+        if (!error) {
+            request = WinHttpOpenRequest(connection, L"GET", target, NULL, WINHTTP_NO_REFERER,
+                                         WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+            if (!request) error = GetLastError();
+        }
+        if (!error && (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                         WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+                       !WinHttpReceiveResponse(request, NULL))) error = GetLastError();
+        if (!error && !WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                           WINHTTP_HEADER_NAME_BY_INDEX, &http_status, &size,
+                                           WINHTTP_NO_HEADER_INDEX)) error = GetLastError();
+        if (error) StringCchPrintfW(status, ARRAYSIZE(status), L"连接错误 %lu", (unsigned long)error);
+        else StringCchPrintfW(status, ARRAYSIZE(status), L"HTTP %lu", (unsigned long)http_status);
+        if (request) WinHttpCloseHandle(request);
+        if (connection) WinHttpCloseHandle(connection);
+        emit(EV_SOURCE_STATUS, index, status, NULL);
+        emit(EV_PROGRESS, (index + 1) * 100 / (int)ARRAYSIZE(driver_sources), NULL, NULL);
+    }
+    WinHttpCloseHandle(session);
+    emit(EV_STATUS, 0, should_cancel() ? L"来源检查已取消。" :
+         L"来源检查结束。HTTP 状态仅反映入口连通性，具体型号和安装包仍需核验。", NULL);
 }
 
 static DWORD WINAPI worker_main(void *unused) {
@@ -442,6 +609,8 @@ static DWORD WINAPI worker_main(void *unused) {
                     else report_error(L"在线匹配驱动", hr);
                 }
             }
+        } else if (task.command == ID_CHECK_SOURCES) {
+            check_sources();
         } else if (task.command == ID_DOWNLOAD && updates && session) {
             download_selected(session, updates, &task);
         }
@@ -465,11 +634,14 @@ static void clear_candidates(void) {
 static void set_busy(BOOL value) {
     busy = value;
     EnableWindow(scan_button, !value);
+    EnableWindow(update_list, !value);
     EnableWindow(source_box, !value);
     EnableWindow(download_button, !value && candidate_count > 0);
     EnableWindow(folder_button, !value);
     EnableWindow(folder_edit, !value);
     EnableWindow(all_button, !value);
+    EnableWindow(auto_install_box, !value);
+    EnableWindow(check_sources_button, !value);
     EnableWindow(cancel_button, value);
     if (!value) SendMessageW(progress_bar, PBM_SETMARQUEE, FALSE, 0);
 }
@@ -503,6 +675,11 @@ static INT_PTR CALLBACK license_dialog(HWND dialog, UINT message, WPARAM wp, LPA
 static void start_download(void) {
     Task task = { .command = ID_DOWNLOAD };
     if (busy) return;
+    task.install = SendMessageW(auto_install_box, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (task.install && !IsUserAnAdmin()) {
+        MessageBoxW(main_window, L"自动安装驱动需要管理员权限，请以管理员身份运行程序。", L"安装权限", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
     GetWindowTextW(folder_edit, task.folder, ARRAYSIZE(task.folder));
     if (!task.folder[0] || PathIsRelativeW(task.folder)) {
         MessageBoxW(main_window, L"请选择完整的驱动保存路径。", L"保存位置", MB_OK | MB_ICONINFORMATION);
@@ -516,6 +693,7 @@ static void start_download(void) {
     for (int row_index = 0; row_index < candidate_count; ++row_index) {
         if (!ListView_GetCheckState(update_list, row_index)) continue;
         Candidate *row = candidates[row_index];
+        if (row->installed) continue;
         if (!row->accepted) {
             if (!row->eula || !row->eula[0]) {
                 MessageBoxW(main_window, L"无法读取所选驱动的许可协议，请重新扫描后再试。", L"许可协议", MB_OK | MB_ICONWARNING);
@@ -577,11 +755,15 @@ static void copy_hardware_id(void) {
 }
 
 static void show_tab(void) {
-    BOOL updates = TabCtrl_GetCurSel(tab_control) == 0;
-    ShowWindow(update_list, updates ? SW_SHOW : SW_HIDE);
-    ShowWindow(hardware_list, updates ? SW_HIDE : SW_SHOW);
-    ShowWindow(all_button, updates ? SW_SHOW : SW_HIDE);
-    ShowWindow(copy_button, updates ? SW_HIDE : SW_SHOW);
+    int tab = TabCtrl_GetCurSel(tab_control);
+    ShowWindow(update_list, tab == 0 ? SW_SHOW : SW_HIDE);
+    ShowWindow(hardware_list, tab == 1 ? SW_SHOW : SW_HIDE);
+    ShowWindow(source_list, tab == 2 ? SW_SHOW : SW_HIDE);
+    ShowWindow(all_button, tab == 0 ? SW_SHOW : SW_HIDE);
+    ShowWindow(copy_button, tab == 1 ? SW_SHOW : SW_HIDE);
+    ShowWindow(check_sources_button, tab == 2 ? SW_SHOW : SW_HIDE);
+    ShowWindow(open_source_button, tab == 2 ? SW_SHOW : SW_HIDE);
+    ShowWindow(auto_install_box, tab == 0 ? SW_SHOW : SW_HIDE);
 }
 
 static void add_column(HWND list, int index, const WCHAR *title, int width) {
@@ -615,6 +797,8 @@ static void create_controls(HWND window) {
     TabCtrl_InsertItem(tab_control, 0, &tab);
     tab.pszText = L"本机硬件";
     TabCtrl_InsertItem(tab_control, 1, &tab);
+    tab.pszText = L"厂商下载来源";
+    TabCtrl_InsertItem(tab_control, 2, &tab);
     update_list = control(window, WC_LISTVIEWW, L"", LVS_REPORT | LVS_SHOWSELALWAYS | WS_TABSTOP | WS_BORDER, 0);
     ListView_SetExtendedListViewStyle(update_list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     add_column(update_list, 0, L"适用驱动及版本", 400);
@@ -627,12 +811,29 @@ static void create_controls(HWND window) {
     add_column(hardware_list, 1, L"硬件 ID", 390);
     add_column(hardware_list, 2, L"当前驱动版本", 140);
     add_column(hardware_list, 3, L"设备状态", 150);
+    source_list = control(window, WC_LISTVIEWW, L"", LVS_REPORT | LVS_SHOWSELALWAYS | WS_TABSTOP | WS_BORDER, 0);
+    ListView_SetExtendedListViewStyle(source_list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    add_column(source_list, 0, L"来源", 150);
+    add_column(source_list, 1, L"覆盖设备", 260);
+    add_column(source_list, 2, L"接入方式", 200);
+    add_column(source_list, 3, L"入口连通性", 170);
+    for (int index = 0; index < (int)ARRAYSIZE(driver_sources); ++index) {
+        LVITEMW item = { .mask = LVIF_TEXT, .iItem = index, .pszText = (WCHAR *)driver_sources[index].name };
+        ListView_InsertItem(source_list, &item);
+        ListView_SetItemText(source_list, index, 1, (WCHAR *)driver_sources[index].devices);
+        ListView_SetItemText(source_list, index, 2, (WCHAR *)driver_sources[index].mode);
+        ListView_SetItemText(source_list, index, 3, L"待检查");
+    }
+    check_sources_button = control(window, L"BUTTON", L"检查来源连通性", WS_TABSTOP, ID_CHECK_SOURCES);
+    open_source_button = control(window, L"BUTTON", L"打开所选官方来源", WS_TABSTOP, ID_OPEN_SOURCE);
+    auto_install_box = control(window, L"BUTTON", L"下载后自动安装", WS_TABSTOP | BS_AUTOCHECKBOX, ID_AUTO_INSTALL);
+    SendMessageW(auto_install_box, BM_SETCHECK, BST_CHECKED, 0);
     all_button = control(window, L"BUTTON", L"全选 / 取消全选", WS_TABSTOP, ID_ALL);
     copy_button = control(window, L"BUTTON", L"复制所选硬件 ID", WS_TABSTOP, ID_COPY);
     folder_edit = control(window, L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 0);
     folder_button = control(window, L"BUTTON", L"保存位置…", WS_TABSTOP, ID_FOLDER);
     open_button = control(window, L"BUTTON", L"打开文件夹", WS_TABSTOP, ID_OPEN);
-    download_button = control(window, L"BUTTON", L"下载勾选驱动", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_DOWNLOAD);
+    download_button = control(window, L"BUTTON", L"下载并安装", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_DOWNLOAD);
     progress_bar = control(window, PROGRESS_CLASSW, L"", PBS_SMOOTH, 0);
     SendMessageW(progress_bar, PBM_SETRANGE32, 0, 100);
     status_label = control(window, L"STATIC", L"正在检测本机硬件…", 0, 0);
@@ -654,6 +855,10 @@ static void resize_controls(int width, int height) {
     MoveWindow(tab_control, 16, 62, width - 32, height - 244, TRUE);
     MoveWindow(update_list, 24, 96, width - 48, height - 287, TRUE);
     MoveWindow(hardware_list, 24, 96, width - 48, height - 287, TRUE);
+    MoveWindow(source_list, 24, 96, width - 48, height - 287, TRUE);
+    MoveWindow(check_sources_button, 16, height - 174, 165, 28, TRUE);
+    MoveWindow(open_source_button, 192, height - 174, 190, 28, TRUE);
+    MoveWindow(auto_install_box, 205, height - 174, 210, 28, TRUE);
     MoveWindow(all_button, 16, height - 174, 160, 28, TRUE);
     MoveWindow(copy_button, 16, height - 174, 180, 28, TRUE);
     MoveWindow(folder_edit, 16, height - 134, width - 398, 28, TRUE);
@@ -692,10 +897,17 @@ static void process_event(Event *event) {
         SetWindowTextW(status_label, event->text);
     } else if (event->kind == EV_PROGRESS) {
         SendMessageW(progress_bar, PBM_SETPOS, event->index, 0);
-    } else if (event->kind == EV_ITEM_STATUS) {
-        for (int index = 0; index < candidate_count; ++index)
-            if (candidates[index]->index == event->index)
-                ListView_SetItemText(update_list, index, 3, event->text);
+    } else if (event->kind == EV_ITEM_STATUS || event->kind == EV_INSTALLED) {
+        for (int index = 0; index < candidate_count; ++index) {
+            if (candidates[index]->index != event->index) continue;
+            ListView_SetItemText(update_list, index, 3, event->text);
+            if (event->kind == EV_INSTALLED) {
+                candidates[index]->installed = TRUE;
+                ListView_SetCheckState(update_list, index, FALSE);
+            }
+        }
+    } else if (event->kind == EV_SOURCE_STATUS) {
+        ListView_SetItemText(source_list, event->index, 3, event->text);
     } else if (event->kind == EV_DONE) {
         if (!InterlockedCompareExchange(&quitting, 0, 0)) set_busy(FALSE);
     } else if (event->kind == EV_EXIT) {
@@ -747,6 +959,23 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
             }
             break;
         case ID_DOWNLOAD: start_download(); break;
+        case ID_AUTO_INSTALL:
+            SetWindowTextW(download_button, SendMessageW(auto_install_box, BM_GETCHECK, 0, 0) == BST_CHECKED ?
+                           L"下载并安装" : L"仅下载");
+            break;
+        case ID_CHECK_SOURCES:
+            if (!busy) {
+                Task task = { .command = ID_CHECK_SOURCES };
+                SetWindowTextW(status_label, L"正在检查官方来源入口连通性…");
+                start_task(&task);
+            }
+            break;
+        case ID_OPEN_SOURCE: {
+            int selected = ListView_GetNextItem(source_list, -1, LVNI_SELECTED);
+            if (selected >= 0)
+                ShellExecuteW(window, L"open", driver_sources[selected].url, NULL, NULL, SW_SHOWNORMAL);
+            break;
+        }
         case ID_CANCEL:
             InterlockedExchange(&cancelled, 1);
             EnableWindow(cancel_button, FALSE);
@@ -763,9 +992,9 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         case ID_ALL: {
             BOOL all = TRUE;
             for (int index = 0; index < candidate_count; ++index)
-                if (!ListView_GetCheckState(update_list, index)) all = FALSE;
+                if (!candidates[index]->installed && !ListView_GetCheckState(update_list, index)) all = FALSE;
             for (int index = 0; index < candidate_count; ++index)
-                ListView_SetCheckState(update_list, index, !all);
+                ListView_SetCheckState(update_list, index, !all && !candidates[index]->installed);
             break;
         }
         }
@@ -793,7 +1022,13 @@ static int self_test(void) {
     IUpdateSession *session = NULL;
     HRESULT hr = CoCreateInstance(&CLSID_UpdateSession, NULL, CLSCTX_INPROC_SERVER,
                                   &IID_IUpdateSession, (void **)&session);
-    if (session) IUpdateSession_Release(session);
+    if (session) {
+        IUpdateInstaller *installer = NULL;
+        hr = IUpdateSession_CreateUpdateInstaller(session, &installer);
+        if (SUCCEEDED(hr)) hr = quiet_installer(installer);
+        if (installer) IUpdateInstaller_Release(installer);
+        IUpdateSession_Release(session);
+    }
     return FAILED(hr) ? 3 : 0;
 }
 
@@ -826,7 +1061,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command, int s
     type.hIcon = LoadIconW(NULL, IDI_APPLICATION);
     type.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     RegisterClassW(&type);
-    HWND window = CreateWindowExW(0, type.lpszClassName, L"驱动源 " APP_VERSION L" · 自动检测与下载",
+    HWND window = CreateWindowExW(0, type.lpszClassName, L"驱动源 " APP_VERSION L" · 自动检测、下载与安装",
                                   WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1120, 760,
                                   NULL, NULL, instance, NULL);
     if (!window) { CloseHandle(task_event); DeleteCriticalSection(&task_lock); CoUninitialize(); return 1; }

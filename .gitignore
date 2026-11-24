@@ -8,3 +8,8 @@ build/
 *.obj
 *.res
 *.o
+tools/
+mingw64/
+cmake-build-*/
+build-vs/
+build-gcc/

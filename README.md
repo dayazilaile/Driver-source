@@ -1,62 +1,96 @@
-# 驱动源 · C 原生版 0.1.1
+# 驱动源 · C 原生版 0.1.2
 
-Windows 原生桌面驱动下载软件，使用 C 和 Win32 API 编写。适用于 Windows 10/11 x64。
+Windows 10/11 x64 驱动检测、下载与安装软件。使用 C17 和 Windows 系统 API 编写。
 
 ## 使用
 
-可先下载仓库 `releases/DriverSource-0.1.1-x64.zip` 中的 MinGW 构建包，解压后运行 EXE。SHA-256 文件位于同一目录。GitHub Actions 的 Windows MSVC 构建产物可在工作流完成后获取。
+下载 `releases/DriverSource-0.1.2-x64.zip`，解压并运行 `DriverSource.exe`。Windows 会请求管理员权限，用于安装驱动。压缩包包含可编译的完整项目源码。
 
-运行 `DriverSource.exe` 后，程序自动检测本机硬件，并在线查询适合当前电脑的驱动。首次查询可能需要几分钟。
+1. 启动后自动检测本机硬件，并按当前系统版本在线查询适用驱动。
+2. 在“可下载驱动”中勾选需要的项目，选择保存目录。
+3. 默认勾选“下载后自动安装”。点击“下载并安装”，下载成功后逐项安装。取消该选项可以仅下载。
+4. 如果驱动有尚未接受的许可协议，阅读并确认后继续。
+5. 列表显示每项下载、保存、安装结果及错误码。成功安装的项目会取消勾选，当前列表再次执行时跳过这些项目。
+6. Windows 要求重启时，程序提示手动重启并停止处理后续项目。保存工作并重启后，可重新扫描。
+7. “取消”会请求更新服务停止任务。安装结果以更新服务返回的实际结果为准，已完成安装的项目仍会显示成功。
 
-1. 在“本机硬件”查看设备名称、硬件 ID、当前驱动版本和设备问题。
-2. 在“可下载驱动”勾选需要的驱动，选择保存目录，点击“下载勾选驱动”。
-3. 如果驱动包含尚未接受的许可协议，阅读后确认。程序显示下载进度和每项结果。
-4. 下载完成后点击“打开文件夹”。每个驱动包保存在独立的 `Driver-{GUID}` 子目录，失败的临时导出目录会清理。
-5. “取消”会请求 Windows 更新服务停止当前操作，已保存的驱动包可以继续使用。
+“本机硬件”可查看设备名称、硬件 ID、当前驱动版本及设备问题。“厂商下载来源”包含 29 个候选官方入口，可以在本机检查入口的 HTTP 连通性并打开所选官方来源。
 
-程序提供驱动包下载。安装时可在设备管理器选择“更新驱动程序 → 浏览我的电脑以查找驱动程序”，指定驱动所在目录。更新服务可能提供 CAB 格式包，需先使用 Windows 自带 `expand` 工具解压，再指定包含 INF 的目录。
+## 驱动来源
 
-## 驱动来源与覆盖
+自动匹配、下载、签名与包校验、安装使用 Windows Update Agent API，支持系统配置的更新服务（包括内网 WSUS）及微软 Windows Update。查询范围为服务判定适用、尚未安装且未隐藏的驱动。
 
-自动匹配、下载和更新包校验均使用 Windows Update Agent API。软件免费使用，无账号或会员要求。
+厂商来源清单包括联想、华为、华硕、戴尔、惠普、英伟达、AMD、英特尔、微星、技嘉、普联等，另收录联想 XML、戴尔 CAB、惠普 CAB 机型驱动包目录。清单及核查结果见 [SOURCES.md](SOURCES.md)。
 
-- “系统更新源”使用当前 Windows 配置的服务，支持单位部署在国内或内网的 WSUS。
-- “微软 Windows Update”直接查询微软官方更新服务。实际下载节点由 Windows 更新服务和 CDN 调度决定。
-- 切换来源后会重新扫描，更新源或单位策略可以限制返回的驱动。
+厂商来源当前提供入口查询和连通性检查，自动匹配及安装链路使用 Windows 更新服务。机型驱动包目录仍需实现各厂商的机型、系统匹配和包解析。实际下载节点地域由来源服务决定。
 
-当前自动匹配范围为更新服务判定“适用、尚未安装、未隐藏”的驱动。缺失驱动和可用的驱动更新会按服务收录情况返回。已安装且没有可用更新的设备，仍可在本机硬件列表查看。
+当前云环境的白名单拦截厂商站点请求，候选入口的实际安装包下载尚未在线验证。HTTP 200 仅表明入口返回成功响应，具体型号、版本和驱动包还需核对。
 
-国内厂商独立驱动库尚未接入。当前版本的公共源是微软官方更新服务，下载节点地域由该服务决定。要覆盖厂商特供、旧型号或重下当前已安装版本，需要继续接入相应厂商的数据源。
+## 自行编译
 
-## 常见问题
+程序链接 Windows 系统库。编译器可以沿用现有工具链，无需安装额外的运行库或包管理器。
 
-- 扫描失败会显示 HRESULT 错误码。检查网络连接、Windows Update 服务以及单位的更新策略，权限不足时以管理员身份运行。
-- 没有匹配结果表示所选服务未返回适用的新驱动。可切换来源重试，并在硬件列表查看设备状态。
-- 取消可能需要等待 Windows 更新服务处理。关闭窗口时也会先请求取消并等待后台任务退出。
-- Windows 会将下载包保留在系统更新缓存中。取消导出会清理程序自身的临时目录，缓存管理遵循 Windows 的策略。
-- 本机硬件信息在程序中展示。在线查询会由 Windows 更新服务发送匹配所需信息，遵循系统更新的服务与策略。
+### 一键编译
 
-## 构建
-
-安装 Visual Studio 2022 的“使用 C++ 的桌面开发”工作负载，其中包含 MSVC C 编译器和 Windows SDK。在 **x64 Native Tools Command Prompt for VS 2022** 中运行：
+在 Windows 运行：
 
 ```bat
 build-windows.bat
 ```
 
-输出为 `dist\DriverSource.exe`。源文件通过 `/TC /std:c17` 作为 C 编译。
+脚本优先识别 MinGW-w64 GCC，随后尝试 MSVC。输出为 `dist\DriverSource.exe`。
 
-GitHub Actions 同样构建 C 程序，检查原生窗口启动、SetupAPI 和 Windows Update COM 初始化，再上传 EXE。版本标签构建成功后会发布到 Releases。
+- **MinGW-w64** — 使用支持 C17 的 64 位 GCC，将其 `bin` 加入 PATH。也可将工具链放入项目内 `tools\mingw64` 或 `mingw64` 目录。需包含 GCC 和 windres。
+- **MSVC** — 安装 Visual Studio 2022 或 Build Tools 的 MSVC 与 Windows SDK 组件。脚本通过 vswhere 自动初始化编译环境，也可从 x64 Native Tools 命令提示符运行。
+
+可以明确指定编译器：
+
+```bat
+build-windows.bat mingw
+build-windows.bat msvc
+```
+
+### IDE 与 CMake
+
+支持 CMake 3.20+。可用支持 CMake 的 IDE 打开项目。Visual Studio 2022 的命令行构建方式为：
+
+```bat
+cmake -S . -B build-vs -G "Visual Studio 17 2022" -A x64
+cmake --build build-vs --config Release
+```
+
+输出为 `build-vs\Release\DriverSource.exe`。
+
+在已配置 MinGW-w64 和 Ninja 的命令行中，也可使用：
+
+```bat
+cmake -S . -B build-gcc -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_RC_COMPILER=windres
+cmake --build build-gcc
+```
+
+输出为 `build-gcc\DriverSource.exe`。
+
+## 下载、安装与取消结果
+
+驱动先下载至 Windows 更新缓存，再导出到保存目录下独立的 `Driver-{GUID}` 子目录。备份导出失败会单独记录，自动安装仍可使用更新缓存中的已下载包。仅下载模式下，导出失败会计为该项失败。
+
+失败或取消的程序临时导出目录会清理，Windows 更新缓存由系统管理。安装取消由 Windows 更新服务处理，可能需要等待当前步骤完成。关闭程序时也会请求结束任务。
+
+安装失败会显示 HRESULT 错误码。可检查 Windows Update 服务、网络以及单位更新策略后重试。未匹配到驱动表示当前服务未返回适用的新驱动，设备仍可在硬件列表查看。
+
+在线查询所需的设备信息由 Windows 更新服务处理，遵循系统的更新服务与策略。
 
 ## 验证范围
 
-当前 Linux 开发环境已使用 MinGW-w64 将源码交叉编译为 Windows x64 EXE，编译启用 `-Wall -Wextra -Werror`。EXE 仅导入 Windows 系统 DLL。
+Linux 环境已通过 MinGW-w64 警告检查、GCC 静态分析及 CMake 交叉构建，生成 Windows x64 EXE。真实 Windows 电脑的在线匹配、下载、安装与重启结果仍需实机验证。
 
-Windows 实机的在线匹配、驱动下载和导出仍需验证。提供两个 Windows 检查入口，退出码为 0 表示通过：
+提供两个 Windows 检查入口，退出码 0 表示通过：
 
 ```bat
 DriverSource.exe --self-test
 DriverSource.exe --smoke-test
 ```
 
-前者检查本机设备枚举和 Windows Update COM 初始化，后者创建并关闭原生窗口。以上检查不代表真实在线驱动下载成功。
+前者检查设备枚举和 Windows Update 安装器初始化，后者创建并关闭原生窗口。这些检查不会执行驱动安装。
+
+GitHub Actions 分别使用 MSVC 和 MinGW 编译，并运行上述检查。版本标签的 MSVC 构建成功后发布到 Releases。

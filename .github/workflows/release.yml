@@ -10,7 +10,36 @@ permissions:
   contents: write
 
 jobs:
+  mingw:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc
+      - name: Compile with MinGW-w64
+        shell: msys2 {0}
+        run: MSYS2_ARG_CONV_EXCL='*' cmd.exe /c build-windows.bat mingw
+      - name: Check native executable
+        shell: pwsh
+        run: |
+          foreach ($argument in @('--self-test', '--smoke-test')) {
+            $process = Start-Process dist/DriverSource.exe -ArgumentList $argument -PassThru
+            if (-not $process.WaitForExit(60000)) {
+              $process.Kill()
+              throw "$argument timed out"
+            }
+            if ($process.ExitCode -ne 0) { throw "$argument failed with $($process.ExitCode)" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DriverSource-MinGW-Windows-x64
+          path: dist/DriverSource.exe
+
   windows:
+    needs: mingw
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +48,7 @@ jobs:
           arch: x64
       - name: Compile C with warnings treated as errors
         shell: cmd
-        run: call build-windows.bat
+        run: call build-windows.bat msvc
       - name: Check hardware API and native window startup
         shell: pwsh
         run: |
