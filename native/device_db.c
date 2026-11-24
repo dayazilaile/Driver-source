@@ -200,7 +200,7 @@ static const char *vendor_source(uint32_t vendor, int usb) {
         case 0x056a: case 0x0531: return "wacom"; case 0x046d: return "logitech"; case 0x04b8: return "epson";
         case 0x04a9: return "canon"; case 0x04f9: return "brother"; case 0x03f0: return "hp";
         case 0x0bda: return "realtek"; case 0x8087: return "intel"; case 0x1a86: return "wch";
-        case 0x10c4: return "silabs"; case 0x0403: return "ftdi"; case 0x2feb: return "veikk";
+        case 0x303a: return "espressif"; case 0x10c4: return "silabs"; case 0x0403: return "ftdi"; case 0x2feb: return "veikk";
         case 0x067b: return "prolific"; case 0x0b57: return "hanvon"; case 0x1235: return "focusrite";
         case 0x0499: return "yamaha"; case 0x1532: return "razer"; case 0x1b1c: return "corsair";
         case 0x1038: return "steelseries"; case 0x0951: return "kingston"; case 0x04e8: return "samsung";

@@ -322,16 +322,17 @@ static void vendor_transfer(int percent, const WCHAR *text) {
     emit(EV_TRANSFER, 0, text, NULL);
 }
 
-static void download_selected(const Task *task) {
+static HRESULT download_selected(const Task *task) {
+    HRESULT outcome = S_OK;
     int successful = 0, failed = 0;
     BOOL reboot = FALSE;
     if (task->install && task->pre_backup) {
         HRESULT checkpoint = create_backup(task);
-        if (FAILED(checkpoint) || should_cancel()) return;
+        if (FAILED(checkpoint) || should_cancel()) return FAILED(checkpoint) ? checkpoint : HRESULT_FROM_WIN32(ERROR_CANCELLED);
     }
     for (int item = 0; item < task->count && !should_cancel() && !reboot; ++item) {
         int index = task->indices[item];
-        if (index < 0 || (size_t)index >= vendor_catalog.count) { ++failed; continue; }
+        if (index < 0 || (size_t)index >= vendor_catalog.count) { ++failed; outcome = E_INVALIDARG; continue; }
         const VendorPackage *package = &vendor_catalog.packages[index];
         WCHAR text[1024], saved[MAX_PATH] = L"", inf[MAX_PATH];
         StringCchPrintfW(text, ARRAYSIZE(text), L"正在处理厂商驱动 %d / %d。", item + 1, task->count);
@@ -339,14 +340,17 @@ static void download_selected(const Task *task) {
         emit(EV_ITEM_STATUS, index, L"厂商直连下载中", NULL);
         HRESULT hr = vendor_download_package(package, task->folder, should_cancel,
             vendor_transfer, saved, ARRAYSIZE(saved));
+        log_update_result(L"厂商直连下载与 SHA-256 校验", hr);
         BOOL submitted = FALSE;
         if (SUCCEEDED(hr) && task->install && !should_cancel()) {
             emit(EV_ITEM_STATUS, index, L"正在解压已校验驱动包", NULL);
             hr = vendor_extract_package(package, saved, should_cancel, inf, ARRAYSIZE(inf));
+            log_update_result(L"已校验厂商包解压", hr);
             if (SUCCEEDED(hr) && !should_cancel()) {
                 emit(EV_ITEM_STATUS, index, L"系统正在匹配安装", NULL);
                 vendor_transfer(-1, L"Windows 正在检查签名并匹配安装，取消将在当前安装返回后生效…");
                 hr = vendor_install_inf(inf, saved, &reboot);
+                log_update_result(L"PnPUtil 系统匹配安装", hr);
                 submitted = SUCCEEDED(hr);
             }
         }
@@ -360,6 +364,7 @@ static void download_selected(const Task *task) {
                  task->install ? reboot ? L"已提交匹配安装，需要重启" : L"已提交系统匹配安装" : L"已保存并校验", NULL);
         } else {
             ++failed;
+            outcome = hr;
             StringCchPrintfW(text, ARRAYSIZE(text), L"%s 0x%08lX，详见日志",
                 hr == HRESULT_FROM_WIN32(ERROR_CANCELLED) ? L"已取消" : L"失败", (unsigned long)hr);
             emit(EV_ITEM_STATUS, index, text, NULL);
@@ -372,6 +377,8 @@ static void download_selected(const Task *task) {
         reboot ? L"系统要求重启，请保存工作后手动重启。" :
         task->install ? L"Windows 按驱动排名决定是否替换现有版本，详情见下载目录 install.log。" : L"驱动包保存在所选下载目录。");
     emit(EV_STATUS, 0, text, NULL);
+    if (should_cancel() && SUCCEEDED(outcome)) outcome = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+    return outcome;
 }
 
 static void check_sources(const Task *task) {
@@ -487,7 +494,9 @@ static DWORD WINAPI worker_main(void *unused) {
         } else if (task.command == ID_CHECK_SOURCES) {
             check_sources(&task);
         } else if (task.command == ID_DOWNLOAD && SUCCEEDED(catalog_hr)) {
-            download_selected(&task);
+            last_error = download_selected(&task);
+            last_step = L"厂商下载与匹配安装";
+            publish_diagnostics(last_error, last_step);
         }
         emit(EV_DONE, 0, NULL, NULL);
     }
