@@ -1,8 +1,19 @@
 # 驱动来源核查
 
-核查日期为 2026-11-24。软件收录 51 个候选来源入口。自动匹配与安装目前使用系统更新服务和微软 Windows Update。
+核查日期为 2026-11-24。软件收录 51 个候选来源入口。0.2.0 的自动匹配与安装使用本地厂商包目录及独立 HTTPS 下载。
 
 云环境网络白名单拦截厂商域名，已观察到的请求错误为 CONNECT 403。以下入口的实际驱动包可用性和国内下载速度尚未验证。软件提供本机连通性检查，检查结果展示 HTTP 状态或 Windows 网络错误码。
+
+## 已接入的实际安装包
+
+| 包 | 精确硬件 ID | 版本 | 原始发布 |
+| --- | --- | --- | --- |
+| ESP32-S2 USB | `USB\VID_303A&PID_0002&MI_02` | 1.0.0.0 | [Espressif](https://github.com/espressif/esp-win-usb-drivers/releases/tag/ESP32-S2_v1.0.0.0) |
+| ESP32 USB JTAG | `USB\VID_303A&PID_1001&MI_02` | 6.1.7600.16386 | [Espressif](https://github.com/espressif/esp-win-usb-drivers/releases/tag/ESP32-USB-JTAG_v6.1.7600.16386) |
+
+已下载核对大小、SHA-256、x64 INF、完整硬件 ID、CAT 文件和归档成员路径。CAT 中的签名证书主体为 Espressif Systems (Shanghai) Co., Ltd.；系统实际信任和安装结果由 Windows 检查。该来源的国内下载速度尚未验证。程序不内置这些二进制驱动包，只保存匹配目录，运行时从原始发布下载。
+
+其他支持入口的机型、系统和安装包仍需逐项接入。共有三个开发板包使用 FTDI 的共享接口 ID，本版未加入自动下载目录，以免匹配到其他 FTDI 设备。
 
 ## 机型驱动包目录
 
@@ -46,7 +57,7 @@
 | [迅捷网络](https://service.fastcom.com.cn/download) | 无线、有线、USB 网卡 | 厂商支持页 | 入口待设备与系统适配核验 |
 | [机械革命](https://www.mechrevo.com/service/) | 笔记本、整机 | 厂商支持页 | 入口待设备与系统适配核验 |
 | [京瓷中国](https://www.kyoceradocumentsolutions.com.cn/support/mfp/download.html) | 打印机、复合机 | 厂商支持页 | 入口待设备与系统适配核验 |
-| [微软更新目录](https://www.catalog.update.microsoft.com/) | 按硬件 ID 搜索驱动 | 厂商支持页 | 入口待设备与系统适配核验 |
+| [乐鑫 Espressif](https://github.com/espressif/esp-win-usb-drivers/releases) | ESP32 USB、JTAG 接口 | 2 个精确 ID 安装包 | 原始包和 INF 已核验 |
 | [Wacom 中国](https://www.wacom.com/zh-cn/support/product-support/drivers) | 数位板、手绘屏、数位笔 | 厂商支持入口 | 云环境代理拦截，入口待核验 |
 | [绘王 Huion](https://www.huion.cn/download/) | 数位板、手绘屏 | 厂商支持入口 | 云环境代理拦截，入口待核验 |
 | [汉王友基 XP-Pen](https://www.xp-pen.com.cn/download/) | 数位板、手绘屏 | 厂商支持入口 | 云环境代理拦截，入口待核验 |

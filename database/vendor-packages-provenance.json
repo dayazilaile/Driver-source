@@ -1,0 +1,59 @@
+[
+  {
+    "tag": "ESP32-S2_v1.0.0.0",
+    "url": "https://github.com/espressif/esp-win-usb-drivers/releases/download/ESP32-S2_v1.0.0.0/ESP32-S2-v1.0.0.0.zip",
+    "sha256": "5878e019324d3ecb57f60b46caa102e2ab01f560f8fef09e33ca31d87ef950a4",
+    "size": 9366,
+    "entries": [
+      "esp32s2.cat",
+      "esp32s2.inf"
+    ],
+    "infs": [
+      {
+        "path": "esp32s2.inf",
+        "hwids": [
+          "USB\\VID_303A&PID_0002&MI_02"
+        ],
+        "version": [
+          "07/08/2024,1.0.0.0\r"
+        ]
+      }
+    ]
+  },
+  {
+    "tag": "ESP32-USB-JTAG_v6.1.7600.16386",
+    "url": "https://github.com/espressif/esp-win-usb-drivers/releases/download/ESP32-USB-JTAG_v6.1.7600.16386/ESP32.USB.JTAG-v6.1.7600.16386.zip",
+    "sha256": "92fe5974e521a94c0ebe4f402aef6866dcef0b69770c93bef90fcee8bcdcee50",
+    "size": 5452291,
+    "entries": [
+      "amd64/install-filter.exe",
+      "amd64/libusb0_x86.dll",
+      "amd64/libusb0.dll",
+      "amd64/libusb0.sys",
+      "amd64/libusbK_x86.dll",
+      "amd64/libusbK.dll",
+      "amd64/libusbK.sys",
+      "amd64/WdfCoInstaller01011.dll",
+      "amd64/winusbcoinstaller2.dll",
+      "x86/install-filter.exe",
+      "x86/libusb0_x86.dll",
+      "x86/libusb0.dll",
+      "x86/libusb0.sys",
+      "x86/libusbK.dll",
+      "x86/libusbK.sys",
+      "x86/WdfCoInstaller01011.dll",
+      "x86/winusbcoinstaller2.dll",
+      "USB_JTAG_debug_unit.cat",
+      "USB_JTAG_debug_unit.inf"
+    ],
+    "infs": [
+      {
+        "path": "USB_JTAG_debug_unit.inf",
+        "hwids": [],
+        "version": [
+          "07/14/2021, 6.1.7600.16386\r"
+        ]
+      }
+    ]
+  }
+]

@@ -1,15 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
-project(DriverSource VERSION 0.1.6 LANGUAGES C RC)
+project(DriverSource VERSION 0.2.0 LANGUAGES C RC)
 
 if(NOT WIN32)
     message(FATAL_ERROR "Use a Windows compiler or a Windows cross-compilation toolchain.")
 endif()
 
-add_executable(DriverSource WIN32 native/main.c native/driver_backup.c native/device_db.c native/hardware_database.c native/wua_callbacks.c native/update_diagnostics.c native/app.rc)
+add_executable(DriverSource WIN32 native/main.c native/driver_backup.c native/device_db.c native/hardware_database.c native/vendor_catalog.c native/vendor_download.c native/update_diagnostics.c native/app.rc)
 set_target_properties(DriverSource PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED YES)
 target_include_directories(DriverSource PRIVATE native)
 target_link_libraries(DriverSource PRIVATE setupapi cfgmgr32 ole32 oleaut32 comctl32
-    shell32 shlwapi advapi32 user32 gdi32 uuid winhttp)
+    shell32 shlwapi advapi32 user32 gdi32 uuid winhttp bcrypt)
 
 if(MSVC)
     set_property(TARGET DriverSource PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

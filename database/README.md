@@ -58,3 +58,11 @@ provenance.json 记录固定提交、统计和 SHA-256。source-checks.json 记�
 ## 维护
 
 可维护原始机型 JSON，再使用可选的维护脚本 python scripts/build_tablet_database.py 重建 tablets.tsv。脚本使用 Python 标准库，应用的 C 编译和运行直接使用现有数据文件。替换数据库文件后重新启动程序。修改上游资料时需保留相应来源与许可声明。
+
+## 0.2.0 厂商安装包目录
+
+`vendor-packages.tsv` 是独立下载引擎读取的 UTF-8 TSV。每行 11 列，依次为唯一 key、标题、厂商、版本、以分号分隔的完整硬件 ID、HTTPS 下载地址、SHA-256、文件字节数、最低 Windows 内部版本、架构（当前仅 x64）、归档内根目录 INF 文件名。`#` 开头的行作为注释。
+
+本版支持平面目标 INF 的 ZIP 包，全部归档内容解压到独立目录，供 INF 引用配套文件。扩充目录前必须核验所有成员路径、INF、CAT 和系统条件。当前包含 2 个乐鑫官方发布包，原始核查记录见 `vendor-packages-provenance.json`；其中 JTAG 的 `%DeviceID%` 替换为 INF Strings 节的 `VID_303A&PID_1001&MI_02` 后匹配。
+
+维护检查 `python scripts/verify_vendor_packages.py` 不修改目录、不安装驱动。USB/PCI/数位板资料仍用于设备识别，其记录数不代表已接入的安装包数量。

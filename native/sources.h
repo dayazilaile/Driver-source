@@ -39,7 +39,6 @@ static const DriverSource driver_sources[] = {
     {L"迅捷网络", L"无线、有线、USB 网卡", L"https://service.fastcom.com.cn/download", L"厂商支持页", "fast"},
     {L"机械革命", L"笔记本、整机", L"https://www.mechrevo.com/service/", L"厂商支持页", "mechrevo"},
     {L"京瓷中国", L"打印机、复合机", L"https://www.kyoceradocumentsolutions.com.cn/support/mfp/download.html", L"厂商支持页", "kyocera"},
-    {L"微软更新目录", L"按硬件 ID 搜索驱动", L"https://www.catalog.update.microsoft.com/", L"厂商支持页", "microsoft-catalog"},
     {L"Wacom 中国", L"数位板、手绘屏、数位笔", L"https://www.wacom.com/zh-cn/support/product-support/drivers", L"厂商支持入口", "wacom"},
     {L"绘王 Huion", L"数位板、手绘屏", L"https://www.huion.cn/download/", L"厂商支持入口", "huion"},
     {L"汉王友基 XP-Pen", L"数位板、手绘屏", L"https://www.xp-pen.com.cn/download/", L"厂商支持入口", "xppen"},
@@ -61,6 +60,7 @@ static const DriverSource driver_sources[] = {
     {L"海盗船 Corsair", L"键鼠、耳机、控制器", L"https://www.corsair.com/cn/zh/s/downloads", L"厂商支持入口", "corsair"},
     {L"赛睿 SteelSeries", L"键鼠、耳机", L"https://cn.steelseries.com/gg", L"厂商支持入口", "steelseries"},
     {L"金士顿 Kingston", L"存储、SSD、读卡器", L"https://www.kingston.com/cn/support", L"厂商支持入口", "kingston"},
+    {L"乐鑫 Espressif", L"ESP32 USB、JTAG 调试接口", L"https://github.com/espressif/esp-win-usb-drivers/releases", L"已接入 2 个精确硬件 ID 安装包", "espressif"},
     {L"OpenTabletDriver", L"配置库支持的数位板、手绘屏", L"https://github.com/OpenTabletDriver/OpenTabletDriver/releases", L"开源驱动应用，需确认支持型号", "opentabletdriver"}
 };
 #endif
