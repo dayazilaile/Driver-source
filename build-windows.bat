@@ -43,7 +43,7 @@ if errorlevel 1 exit /b 1
 pushd native
 rc /nologo /fo ..\build\app.res app.rc
 if errorlevel 1 goto failed
-cl /nologo /TC /std:c17 /utf-8 /W4 /WX /O2 /MT /D_CRT_SECURE_NO_WARNINGS main.c driver_backup.c device_db.c hardware_database.c wua_callbacks.c ..\build\app.res /Fo..\build\ /Fe"..\dist\DriverSource.exe" /link /SUBSYSTEM:WINDOWS /MANIFEST:NO setupapi.lib cfgmgr32.lib ole32.lib oleaut32.lib comctl32.lib shell32.lib shlwapi.lib advapi32.lib user32.lib gdi32.lib uuid.lib winhttp.lib
+cl /nologo /TC /std:c17 /utf-8 /W4 /WX /O2 /MT /D_CRT_SECURE_NO_WARNINGS main.c driver_backup.c device_db.c hardware_database.c wua_callbacks.c /Fo..\build\ /Fe"..\dist\DriverSource.exe" /link /SUBSYSTEM:WINDOWS /MANIFEST:NO ..\build\app.res setupapi.lib cfgmgr32.lib ole32.lib oleaut32.lib comctl32.lib shell32.lib shlwapi.lib advapi32.lib user32.lib gdi32.lib uuid.lib winhttp.lib
 if errorlevel 1 goto failed
 popd
 goto done
