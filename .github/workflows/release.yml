@@ -58,8 +58,21 @@ jobs:
         with:
           arch: x64
       - name: Compile C with warnings treated as errors
-        shell: cmd
-        run: call build-windows.bat msvc
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          cmd /c "call build-windows.bat msvc > build\msvc.log 2>&1"
+          $buildExit = $LASTEXITCODE
+          Get-Content build/msvc.log
+          if ($buildExit -ne 0) {
+            $errors = @(Get-Content build/msvc.log | Where-Object { $_ -match 'error C|error LNK|fatal error|warning C' } | Select-Object -First 10)
+            if ($errors.Count -eq 0) { $errors = @(Get-Content build/msvc.log | Select-Object -Last 10) }
+            foreach ($line in $errors) {
+              $escaped = $line.Replace('%', '%25')
+              Write-Output "::error::$escaped"
+            }
+            exit $buildExit
+          }
       - name: Check transfer calculations
         shell: cmd
         run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_transfer.c /Fo"build\test_transfer.obj" /Fe"build\test_transfer.exe" && build\test_transfer.exe
