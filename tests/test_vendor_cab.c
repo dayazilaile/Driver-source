@@ -34,7 +34,7 @@ int main(void) {
         assert(SUCCEEDED(StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\extracted\\*", root)));
         HANDLE find = FindFirstFileW(path, &entry);
         if (find != INVALID_HANDLE_VALUE) {
-            do { wprintf(L"::error::CAB fixture output member: %s\n", entry.cFileName); } while (FindNextFileW(find, &entry));
+            do { wprintf(L"::error::CAB fixture output member: %ls\n", entry.cFileName); } while (FindNextFileW(find, &entry));
             FindClose(find);
         }
     }

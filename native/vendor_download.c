@@ -254,7 +254,7 @@ HRESULT vendor_extract_package(const VendorPackage *package, const WCHAR *saved,
     if (FAILED(hr)) return hr;
     if (!CreateDirectoryW(directory, NULL)) return HRESULT_FROM_WIN32(GetLastError());
     if (package->format == VENDOR_CAB_PACK)
-        hr = StringCchPrintfW(arguments, ARRAYSIZE(arguments), L"-F:* \"%s\" \"%s\"", archive, directory);
+        hr = StringCchPrintfW(arguments, ARRAYSIZE(arguments), L"-R \"%s\" -F:* \"%s\"", archive, directory);
     else hr = StringCchPrintfW(arguments, ARRAYSIZE(arguments), L"-xf \"%s\" -C \"%s\"", archive, directory);
     if (FAILED(hr)) return hr;
     DWORD result = 0;
