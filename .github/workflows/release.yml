@@ -1,9 +1,9 @@
-name: Build Windows release
+name: Build native Windows C application
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -14,34 +14,33 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: ilammy/msvc-dev-cmd@v1
         with:
-          python-version: '3.12'
-      - name: Validate download engine
-        run: python -m unittest discover -s tests -v
-      - name: Validate Windows desktop startup
+          arch: x64
+      - name: Compile C with warnings treated as errors
+        shell: cmd
+        run: call build-windows.bat
+      - name: Check hardware API and native window startup
+        shell: pwsh
         run: |
-          @'
-          import tkinter as tk
-          from desktop import Application
-          root = tk.Tk()
-          app = Application(root)
-          root.update()
-          assert len(app.source_tree.get_children()) == 20
-          app.show_devices({"schemaVersion": 1, "devices": [{"name": "Test GPU", "ids": ["PCI\\VEN_10DE&DEV_1234"]}]})
-          assert len(app.hardware_tree.get_children()) == 1
-          root.destroy()
-          '@ | python -
-      - name: Build desktop executable
-        run: |
-          python -m pip install pyinstaller==6.11.1
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name DriverSource --add-data "sources.js;." desktop.py
+          foreach ($argument in @('--self-test', '--smoke-test')) {
+            $process = Start-Process dist/DriverSource.exe -ArgumentList $argument -PassThru
+            if (-not $process.WaitForExit(60000)) {
+              $process.Kill()
+              throw "$argument timed out"
+            }
+            if ($process.ExitCode -ne 0) { throw "$argument failed with $($process.ExitCode)" }
+          }
+          $hash = (Get-FileHash dist/DriverSource.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  DriverSource.exe" | Set-Content -Encoding ascii dist/DriverSource.exe.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: DriverSource-Windows
-          path: dist/DriverSource.exe
+          name: DriverSource-native-Windows-x64
+          path: |
+            dist/DriverSource.exe
+            dist/DriverSource.exe.sha256
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/DriverSource.exe --title "驱动源 ${{ github.ref_name }}" --notes-file CHANGELOG.md
+        run: gh release create "${{ github.ref_name }}" dist/DriverSource.exe dist/DriverSource.exe.sha256 --title "驱动源 ${{ github.ref_name }} · C 原生版" --notes-file CHANGELOG.md

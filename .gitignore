@@ -5,3 +5,6 @@ dist/
 build/
 *.spec
 .venv-build/
+*.obj
+*.res
+*.o
