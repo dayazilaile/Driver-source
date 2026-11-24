@@ -156,6 +156,6 @@ gcc -std=c17 -Wall -Wextra -Werror tests/test_device_db.c native/device_db.c -o 
 Windows 更新回调的接口与引用计数检查，可在 MinGW-w64 中编译执行：
 
 ```bat
-gcc -std=c17 -Wall -Wextra -Werror tests/test_wua_callbacks.c native/wua_callbacks.c -o test_wua_callbacks.exe -lole32 -luuid
+gcc -std=c17 -Wall -Wextra -Werror tests/test_wua_callbacks.c native/wua_callbacks.c -o test_wua_callbacks.exe -lole32 -loleaut32 -luuid
 test_wua_callbacks.exe
 ```

@@ -30,7 +30,7 @@ jobs:
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_device_db.c native/device_db.c -o build/test_device_db.exe && ./build/test_device_db.exe
       - name: Check Windows Update callback interfaces
         shell: msys2 {0}
-        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_wua_callbacks.c native/wua_callbacks.c -o build/test_wua_callbacks.exe -lole32 -luuid && ./build/test_wua_callbacks.exe
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_wua_callbacks.c native/wua_callbacks.c -o build/test_wua_callbacks.exe -lole32 -loleaut32 -luuid && ./build/test_wua_callbacks.exe
       - name: Check native executable
         shell: pwsh
         run: |
@@ -81,7 +81,7 @@ jobs:
         run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_device_db.c native\device_db.c /Fobuild\ /Fe"build\test_device_db.exe" && build\test_device_db.exe
       - name: Check Windows Update callback interfaces
         shell: cmd
-        run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_wua_callbacks.c native\wua_callbacks.c /Fobuild\ /Fe"build\test_wua_callbacks.exe" /link ole32.lib uuid.lib && build\test_wua_callbacks.exe
+        run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_wua_callbacks.c native\wua_callbacks.c /Fobuild\ /Fe"build\test_wua_callbacks.exe" /link ole32.lib oleaut32.lib uuid.lib && build\test_wua_callbacks.exe
       - name: Check hardware API and native window startup
         shell: pwsh
         run: |

@@ -1,6 +1,8 @@
 #define COBJMACROS
+#define INITGUID
 #include "../native/wua_callbacks.h"
 #include <objbase.h>
+#include <wuapi.h>
 #include <assert.h>
 #include <stdio.h>
 
@@ -30,6 +32,55 @@ static void check_callback(IUnknown *callback, const WCHAR *interface_id) {
     assert(IUnknown_QueryInterface(callback, &iid, NULL) == E_POINTER);
 }
 
+static void check_hr(HRESULT result, const char *stage) {
+    if (FAILED(result)) printf("::error::%s returned 0x%08lX\n", stage, (unsigned long)result);
+    assert(SUCCEEDED(result));
+}
+
+/* Exercise the real WUA boundary using its local cache, then cancel the read-only search. */
+static void check_offline_search(void) {
+    IUpdateSession *session = NULL;
+    IUpdateSearcher *searcher = NULL;
+    ISearchJob *job = NULL;
+    ISearchResult *result = NULL;
+    WuaCallbacks callbacks = {0};
+    VARIANT state;
+    VARIANT_BOOL complete = VARIANT_FALSE;
+    VariantInit(&state);
+    check_hr(CoInitializeEx(NULL, COINIT_MULTITHREADED), "CoInitializeEx");
+    HRESULT security = CoInitializeSecurity(NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_DEFAULT,
+        RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE, NULL);
+    assert(SUCCEEDED(security) || security == RPC_E_TOO_LATE);
+    check_hr(CoCreateInstance(&CLSID_UpdateSession, NULL, CLSCTX_INPROC_SERVER,
+        &IID_IUpdateSession, (void **)&session), "CreateUpdateSession");
+    check_hr(IUpdateSession_CreateUpdateSearcher(session, &searcher), "CreateUpdateSearcher");
+    check_hr(IUpdateSearcher_put_Online(searcher, VARIANT_FALSE), "Offline mode");
+    check_hr(wua_callbacks_create(WUA_SEARCH, &callbacks), "Create callback");
+    BSTR criteria = SysAllocString(L"Type='Driver' and IsInstalled=0 and IsHidden=0");
+    assert(criteria);
+    check_hr(IUpdateSearcher_BeginSearch(searcher, criteria, callbacks.completed, state, &job), "BeginSearch with callback");
+    assert(job);
+    ISearchJob_RequestAbort(job);
+    ULONGLONG started = GetTickCount64();
+    while (!complete) {
+        check_hr(ISearchJob_get_IsCompleted(job, &complete), "Search completion");
+        if (!complete) {
+            if (GetTickCount64() - started >= 30000) puts("::error::Read-only search cancellation timed out");
+            assert(GetTickCount64() - started < 30000);
+            Sleep(100);
+        }
+    }
+    IUpdateSearcher_EndSearch(searcher, job, &result);
+    ISearchJob_CleanUp(job);
+    ISearchJob_Release(job);
+    if (result) ISearchResult_Release(result);
+    wua_callbacks_release(&callbacks);
+    IUpdateSearcher_Release(searcher);
+    IUpdateSession_Release(session);
+    SysFreeString(criteria);
+    CoUninitialize();
+}
+
 int main(void) {
     const WCHAR *completed[] = {
         L"{88AEE058-D4B0-4725-A2F1-814A67AE964C}",
@@ -53,6 +104,7 @@ int main(void) {
     WuaCallbacks callbacks = {0};
     assert(wua_callbacks_create((WuaOperation)99, &callbacks) == E_INVALIDARG);
     assert(wua_callbacks_create(WUA_SEARCH, NULL) == E_POINTER);
-    puts("Windows Update callback interfaces and reference counts passed");
+    check_offline_search();
+    puts("Windows Update callbacks, reference counts and offline BeginSearch passed");
     return 0;
 }
