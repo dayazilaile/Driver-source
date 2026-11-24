@@ -17,13 +17,16 @@
 #include <knownfolders.h>
 #include <strsafe.h>
 #include <stdlib.h>
+#include <string.h>
 #include <wchar.h>
 #include <winhttp.h>
 #include "sources.h"
 #include "driver_backup.h"
 #include "transfer.h"
+#include "hardware_database.h"
+#include "wua_callbacks.h"
 
-#define APP_VERSION L"0.1.3"
+#define APP_VERSION L"0.1.4"
 /* IID from the Windows SDK, also usable with MinGW's base wuapi.h. */
 static const GUID driver_update_iid = {0xb383cd1a, 0x5ce9, 0x4504, {0x9f,0x63,0x76,0x4b,0x12,0x36,0xf1,0x91}};
 #define MAX_UPDATES 2048
@@ -44,11 +47,14 @@ static const GUID driver_update_iid = {0xb383cd1a, 0x5ce9, 0x4504, {0x9f,0x63,0x
 #define ID_OPEN_BACKUP 114
 #define ID_RESTORE 115
 #define ID_PRE_BACKUP 116
+#define ID_DEVICE_SOURCES 117
+#define ID_ALL_SOURCES 118
 
 typedef enum { EV_STATUS, EV_HARDWARE, EV_UPDATE, EV_RESET, EV_PROGRESS,
-               EV_ITEM_STATUS, EV_INSTALLED, EV_SOURCE_STATUS, EV_TRANSFER, EV_DONE, EV_EXIT } EventKind;
+               EV_ITEM_STATUS, EV_INSTALLED, EV_SOURCE_STATUS, EV_DATABASE, EV_TRANSFER, EV_DONE, EV_EXIT } EventKind;
 typedef struct {
     WCHAR name[512], hardware[2048], version[128], state[128];
+    HardwareIdentity identity;
 } Hardware;
 typedef struct {
     WCHAR title[512], hardware[1024], provider[256];
@@ -65,6 +71,7 @@ typedef struct {
 typedef struct {
     int command, source, count, indices[MAX_UPDATES];
     BOOL install, pre_backup;
+    BOOL source_mask[ARRAYSIZE(driver_sources)];
     WCHAR folder[MAX_PATH], backup_root[MAX_PATH];
 } Task;
 
@@ -75,6 +82,11 @@ static HWND auto_install_box, source_list, check_sources_button, open_source_but
 static HWND transfer_label, pre_backup_box, backup_description, backup_edit;
 static HWND backup_button, backup_folder_button, open_backup_button, restore_button, restore_description;
 static WCHAR app_directory[MAX_PATH];
+static HWND database_summary, device_sources_button, all_sources_button, source_context;
+static Hardware **hardware_rows;
+static size_t hardware_count, hardware_capacity;
+static WCHAR source_status[ARRAYSIZE(driver_sources)][128];
+static BOOL source_filter[ARRAYSIZE(driver_sources)], filtering_sources;
 static HFONT ui_font;
 static HANDLE task_event, worker_handle;
 static CRITICAL_SECTION task_lock;
@@ -112,7 +124,11 @@ static void report_error(const WCHAR *operation, HRESULT error) {
     WCHAR message[1024], detail[512] = L"";
     FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                    NULL, (DWORD)error, 0, detail, ARRAYSIZE(detail), NULL);
-    StringCchPrintfW(message, ARRAYSIZE(message),
+    if (error == E_POINTER || error == E_NOINTERFACE)
+        StringCchPrintfW(message, ARRAYSIZE(message),
+            L"%s失败（0x%08lX）。%s 更新接口返回参数或接口兼容性错误，请记录此步骤和错误码。",
+            operation, (unsigned long)error, detail);
+    else StringCchPrintfW(message, ARRAYSIZE(message),
         L"%s失败（0x%08lX）。%s 请检查网络、Windows Update 服务和单位更新策略；权限不足时以管理员身份运行。",
         operation, (unsigned long)error, detail);
     emit(EV_STATUS, 0, message, NULL);
@@ -124,7 +140,7 @@ static void read_registry_string(HKEY key, const WCHAR *name, WCHAR *buffer, DWO
         buffer[0] = 0;
 }
 
-static void scan_hardware(void) {
+static void scan_hardware(const HardwareDatabase *database) {
     HDEVINFO set = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
     SP_DEVINFO_DATA device = { .cbSize = sizeof(device) };
     if (set == INVALID_HANDLE_VALUE) {
@@ -157,6 +173,9 @@ static void scan_hardware(void) {
             StringCchPrintfW(row->state, ARRAYSIZE(row->state), L"设备问题 %lu", (unsigned long)problem);
         else
             StringCchCopyW(row->state, ARRAYSIZE(row->state), L"已检测");
+        hardware_identify(database, set, &device, &row->identity);
+        if (!row->hardware[0])
+            StringCchCopyW(row->hardware, ARRAYSIZE(row->hardware), row->identity.primary_id);
         if (row->name[0]) emit(EV_HARDWARE, 0, NULL, row);
         else free(row);
     }
@@ -182,7 +201,7 @@ static void driver_property(IUpdate *update, WCHAR *name, WCHAR *out, size_t cha
     VariantClear(&result);
 }
 
-static HRESULT find_updates(IUpdateSession *session, int source, IUpdateCollection **updates) {
+static HRESULT find_updates(IUpdateSession *session, int source, IUpdateCollection **updates, const WCHAR **step) {
     IUpdateSearcher *searcher = NULL;
     ISearchJob *job = NULL;
     ISearchResult *result = NULL;
@@ -191,32 +210,51 @@ static HRESULT find_updates(IUpdateSession *session, int source, IUpdateCollecti
     BOOL abort_sent = FALSE;
     OperationResultCode result_code = orcNotStarted;
     BSTR criteria = SysAllocString(L"Type='Driver' and IsInstalled=0 and IsHidden=0");
+    WuaCallbacks callbacks = {0};
     HRESULT hr;
     VariantInit(&state);
     if (!criteria) return E_OUTOFMEMORY;
+    *step = L"创建搜索器（CreateUpdateSearcher）";
     hr = IUpdateSession_CreateUpdateSearcher(session, &searcher);
     if (FAILED(hr)) goto done;
+    *step = L"设置更新源（ServerSelection）";
     hr = IUpdateSearcher_put_ServerSelection(searcher, source == 1 ? ssWindowsUpdate : ssDefault);
     if (FAILED(hr)) goto done;
+    *step = L"设置在线查询（Online）";
     hr = IUpdateSearcher_put_Online(searcher, VARIANT_TRUE);
     if (FAILED(hr)) goto done;
     emit(EV_STATUS, 0, L"正在按本机硬件和系统版本匹配驱动，首次查询可能需要几分钟…", NULL);
-    hr = IUpdateSearcher_BeginSearch(searcher, criteria, NULL, state, &job);
+    *step = L"创建搜索回调";
+    hr = wua_callbacks_create(WUA_SEARCH, &callbacks);
     if (FAILED(hr)) goto done;
-    while (!complete) {
-        if (should_cancel() && !abort_sent) {
-            ISearchJob_RequestAbort(job);
-            abort_sent = TRUE;
+    *step = L"开始异步搜索（BeginSearch）";
+    hr = IUpdateSearcher_BeginSearch(searcher, criteria, callbacks.completed, state, &job);
+    if (hr == E_POINTER && !job && !should_cancel()) {
+        emit(EV_STATUS, 0, L"更新服务正在使用兼容查询方式，取消会在本次查询返回后生效…", NULL);
+        *step = L"兼容同步搜索（Search）";
+        hr = IUpdateSearcher_Search(searcher, criteria, &result);
+        if (FAILED(hr)) goto done;
+    } else {
+        if (FAILED(hr)) goto done;
+        while (!complete) {
+            if (should_cancel() && !abort_sent) {
+                ISearchJob_RequestAbort(job);
+                abort_sent = TRUE;
+            }
+            *step = L"检查异步搜索状态（IsCompleted）";
+            hr = ISearchJob_get_IsCompleted(job, &complete);
+            if (FAILED(hr)) {
+                ISearchJob_RequestAbort(job);
+                goto done;
+            }
+            if (!complete) Sleep(200);
         }
-        hr = ISearchJob_get_IsCompleted(job, &complete);
-        if (FAILED(hr)) {
-            ISearchJob_RequestAbort(job);
-            goto done;
-        }
-        if (!complete) Sleep(200);
+        *step = L"完成异步搜索（EndSearch）";
+        hr = IUpdateSearcher_EndSearch(searcher, job, &result);
+        if (FAILED(hr)) goto done;
     }
-    hr = IUpdateSearcher_EndSearch(searcher, job, &result);
-    if (FAILED(hr)) goto done;
+    if (!result) { hr = E_UNEXPECTED; goto done; }
+    *step = L"读取搜索结果（ResultCode）";
     hr = ISearchResult_get_ResultCode(result, &result_code);
     if (FAILED(hr)) goto done;
     if (should_cancel()) { hr = HRESULT_FROM_WIN32(ERROR_CANCELLED); goto done; }
@@ -224,10 +262,13 @@ static HRESULT find_updates(IUpdateSession *session, int source, IUpdateCollecti
         hr = E_FAIL;
         goto done;
     }
+    *step = L"读取可用驱动集合（Updates）";
     hr = ISearchResult_get_Updates(result, updates);
+    if (SUCCEEDED(hr) && !*updates) hr = E_UNEXPECTED;
     if (SUCCEEDED(hr) && result_code == orcSucceededWithErrors) hr = S_FALSE;
 done:
     if (job) { ISearchJob_CleanUp(job); ISearchJob_Release(job); }
+    wua_callbacks_release(&callbacks);
     if (result) ISearchResult_Release(result);
     if (searcher) IUpdateSearcher_Release(searcher);
     SysFreeString(criteria);
@@ -370,6 +411,7 @@ static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
     OperationResultCode result_code = orcNotStarted;
     BOOL abort_sent = FALSE;
     TransferSample sample = {0};
+    WuaCallbacks callbacks = {0};
     HRESULT hr;
     VariantInit(&state);
     emit(EV_TRANSFER, 0, L"正在连接下载服务，等待传输统计…", NULL);
@@ -386,7 +428,9 @@ static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
     if (FAILED(hr)) goto done;
     hr = IUpdateDownloader_put_Updates(downloader, selection);
     if (FAILED(hr)) goto done;
-    hr = IUpdateDownloader_BeginDownload(downloader, NULL, NULL, state, &job);
+    hr = wua_callbacks_create(WUA_DOWNLOAD, &callbacks);
+    if (FAILED(hr)) goto done;
+    hr = IUpdateDownloader_BeginDownload(downloader, callbacks.progress, callbacks.completed, state, &job);
     if (FAILED(hr)) goto done;
     while (!complete) {
         if (should_cancel() && !abort_sent) {
@@ -425,6 +469,7 @@ static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
     }
 done:
     if (job) { IDownloadJob_CleanUp(job); IDownloadJob_Release(job); }
+    wua_callbacks_release(&callbacks);
     if (result) IDownloadResult_Release(result);
     if (downloader) IUpdateDownloader_Release(downloader);
     if (selection) IUpdateCollection_Release(selection);
@@ -461,6 +506,7 @@ static HRESULT install_one(IUpdateSession *session, IUpdate *update, BOOL *reboo
     VARIANT_BOOL complete = VARIANT_FALSE, restart = VARIANT_FALSE;
     OperationResultCode code = orcNotStarted;
     BOOL abort_sent = FALSE;
+    WuaCallbacks callbacks = {0};
     HRESULT hr = single_update_collection(update, &selection);
     VariantInit(&state);
     *reboot = FALSE;
@@ -481,7 +527,9 @@ static HRESULT install_one(IUpdateSession *session, IUpdate *update, BOOL *reboo
     hr = quiet_installer(installer);
     if (FAILED(hr)) goto done;
     if (should_cancel()) { hr = HRESULT_FROM_WIN32(ERROR_CANCELLED); goto done; }
-    hr = IUpdateInstaller_BeginInstall(installer, NULL, NULL, state, &job);
+    hr = wua_callbacks_create(WUA_INSTALL, &callbacks);
+    if (FAILED(hr)) goto done;
+    hr = IUpdateInstaller_BeginInstall(installer, callbacks.progress, callbacks.completed, state, &job);
     if (FAILED(hr)) goto done;
     while (!complete) {
         if (should_cancel() && !abort_sent) {
@@ -522,6 +570,7 @@ static HRESULT install_one(IUpdateSession *session, IUpdate *update, BOOL *reboo
 done:
     if (item_result) IUpdateInstallationResult_Release(item_result);
     if (job) { IInstallationJob_CleanUp(job); IInstallationJob_Release(job); }
+    wua_callbacks_release(&callbacks);
     if (result) IInstallationResult_Release(result);
     if (installer) IUpdateInstaller_Release(installer);
     if (selection) IUpdateCollection_Release(selection);
@@ -605,12 +654,16 @@ static void download_selected(IUpdateSession *session, IUpdateCollection *update
     emit(EV_TRANSFER, 0, L"传输任务已结束", NULL);
 }
 
-static void check_sources(void) {
+static void check_sources(const Task *task) {
     HINTERNET session = WinHttpOpen(L"DriverSource/" APP_VERSION,
         WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) { report_error(L"初始化来源检查", HRESULT_FROM_WIN32(GetLastError())); return; }
     WinHttpSetTimeouts(session, 5000, 5000, 5000, 5000);
+    int total = 0, completed = 0;
+    for (size_t index = 0; index < ARRAYSIZE(driver_sources); ++index)
+        if (task->source_mask[index]) ++total;
     for (int index = 0; index < (int)ARRAYSIZE(driver_sources) && !should_cancel(); ++index) {
+        if (!task->source_mask[index]) continue;
         WCHAR host[256] = L"", path[2048] = L"", extra[1024] = L"", target[3072], status[128];
         URL_COMPONENTS url = { .dwStructSize = sizeof(url), .lpszHostName = host,
             .dwHostNameLength = ARRAYSIZE(host), .lpszUrlPath = path, .dwUrlPathLength = ARRAYSIZE(path),
@@ -641,7 +694,8 @@ static void check_sources(void) {
         if (request) WinHttpCloseHandle(request);
         if (connection) WinHttpCloseHandle(connection);
         emit(EV_SOURCE_STATUS, index, status, NULL);
-        emit(EV_PROGRESS, (index + 1) * 100 / (int)ARRAYSIZE(driver_sources), NULL, NULL);
+        ++completed;
+        emit(EV_PROGRESS, total ? completed * 100 / total : 0, NULL, NULL);
     }
     WinHttpCloseHandle(session);
     emit(EV_STATUS, 0, should_cancel() ? L"来源检查已取消。" :
@@ -652,6 +706,10 @@ static DWORD WINAPI worker_main(void *unused) {
     (void)unused;
     IUpdateSession *session = NULL;
     IUpdateCollection *updates = NULL;
+    HardwareDatabase database;
+    WCHAR summary[1024];
+    hardware_database_open(&database, app_directory, summary, ARRAYSIZE(summary));
+    emit(EV_DATABASE, 0, summary, NULL);
     HRESULT init = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     HRESULT session_hr = FAILED(init) ? init :
         CoCreateInstance(&CLSID_UpdateSession, NULL, CLSCTX_INPROC_SERVER,
@@ -669,21 +727,23 @@ static DWORD WINAPI worker_main(void *unused) {
         LeaveCriticalSection(&task_lock);
         if (task.command == ID_SCAN) {
             emit(EV_RESET, 0, NULL, NULL);
-            scan_hardware();
+            scan_hardware(&database);
             if (updates) { IUpdateCollection_Release(updates); updates = NULL; }
             if (should_cancel()) emit(EV_STATUS, 0, L"扫描已取消。", NULL);
             else if (FAILED(session_hr)) report_error(L"初始化 Windows 驱动更新服务", session_hr);
             else {
-                HRESULT hr = find_updates(session, task.source, &updates);
+                const WCHAR *step = L"在线匹配驱动";
+                HRESULT hr = find_updates(session, task.source, &updates, &step);
                 if (SUCCEEDED(hr)) {
                     BOOL partial = hr == S_FALSE;
+                    step = L"显示驱动匹配结果";
                     hr = publish_updates(updates);
                     if (SUCCEEDED(hr) && partial)
                         emit(EV_STATUS, 0, L"更新服务仅返回部分匹配结果。可下载列表中的驱动，并稍后重新扫描。", NULL);
                 }
                 if (FAILED(hr)) {
                     if (should_cancel()) emit(EV_STATUS, 0, L"扫描已取消。", NULL);
-                    else report_error(L"在线匹配驱动", hr);
+                    else report_error(step, hr);
                 }
             }
         } else if (task.command == ID_BACKUP) {
@@ -710,7 +770,7 @@ static DWORD WINAPI worker_main(void *unused) {
                 emit(EV_PROGRESS, SUCCEEDED(hr) ? 100 : 0, NULL, NULL);
             }
         } else if (task.command == ID_CHECK_SOURCES) {
-            check_sources();
+            check_sources(&task);
         } else if (task.command == ID_DOWNLOAD && updates && session) {
             download_selected(session, updates, &task);
         }
@@ -718,6 +778,7 @@ static DWORD WINAPI worker_main(void *unused) {
     }
     if (updates) IUpdateCollection_Release(updates);
     if (session) IUpdateSession_Release(session);
+    hardware_database_close(&database);
     if (SUCCEEDED(init)) CoUninitialize();
     emit(EV_EXIT, 0, NULL, NULL);
     return 0;
@@ -742,6 +803,8 @@ static void set_busy(BOOL value) {
     EnableWindow(all_button, !value);
     EnableWindow(auto_install_box, !value);
     EnableWindow(check_sources_button, !value);
+    EnableWindow(device_sources_button, !value);
+    EnableWindow(all_sources_button, !value);
     EnableWindow(pre_backup_box, !value);
     EnableWindow(backup_button, !value);
     EnableWindow(restore_button, !value);
@@ -918,10 +981,77 @@ static void copy_hardware_id(void) {
     } else GlobalFree(memory);
 }
 
+static int source_index(const char *key) {
+    for (size_t index = 0; index < ARRAYSIZE(driver_sources); ++index)
+        if (!strcmp(driver_sources[index].key, key)) return (int)index;
+    return -1;
+}
+
+static void clear_hardware(void) {
+    for (size_t index = 0; index < hardware_count; ++index) free(hardware_rows[index]);
+    hardware_count = 0;
+}
+
+static BOOL remember_hardware(Hardware *row) {
+    if (hardware_count == hardware_capacity) {
+        size_t capacity = hardware_capacity ? hardware_capacity * 2 : 256;
+        Hardware **rows = realloc(hardware_rows, capacity * sizeof(*rows));
+        if (!rows) return FALSE;
+        hardware_rows = rows; hardware_capacity = capacity;
+    }
+    hardware_rows[hardware_count++] = row;
+    return TRUE;
+}
+
+static void render_sources(void) {
+    ListView_DeleteAllItems(source_list);
+    for (int index = 0; index < (int)ARRAYSIZE(driver_sources); ++index) {
+        if (filtering_sources && !source_filter[index]) continue;
+        LVITEMW item = { .mask = LVIF_TEXT | LVIF_PARAM, .iItem = ListView_GetItemCount(source_list),
+            .pszText = (WCHAR *)driver_sources[index].name, .lParam = index };
+        int row = ListView_InsertItem(source_list, &item);
+        ListView_SetItemText(source_list, row, 1, (WCHAR *)driver_sources[index].devices);
+        ListView_SetItemText(source_list, row, 2, (WCHAR *)driver_sources[index].mode);
+        ListView_SetItemText(source_list, row, 3, source_status[index][0] ? source_status[index] : L"待检查");
+    }
+}
+
+static void select_device_sources(void) {
+    if (busy) return;
+    int selected = ListView_GetNextItem(hardware_list, -1, LVNI_SELECTED);
+    LVITEMW item = { .mask = LVIF_PARAM, .iItem = selected };
+    if (selected < 0 || !ListView_GetItem(hardware_list, &item)) {
+        MessageBoxW(main_window, L"请先选择一个本机设备。", L"设备来源", MB_OK);
+        return;
+    }
+    Hardware *row = (Hardware *)item.lParam;
+    memset(source_filter, 0, sizeof(source_filter));
+    for (int index = 0; index < row->identity.match.source_count; ++index) {
+        int provider = source_index(row->identity.match.sources[index]);
+        if (provider >= 0) source_filter[provider] = TRUE;
+    }
+    int catalog = source_index("microsoft-catalog");
+    if (catalog >= 0) source_filter[catalog] = TRUE;
+    filtering_sources = TRUE;
+    WCHAR text[1024];
+    StringCchPrintfW(text, ARRAYSIZE(text), L"设备来源建议 · %s · %s", row->name, row->identity.basis);
+    SetWindowTextW(source_context, text);
+    render_sources();
+    TabCtrl_SetCurSel(tab_control, 2);
+}
+
+static void utf8_text(const char *text, WCHAR *out, int chars) {
+    if (!MultiByteToWideChar(CP_UTF8, 0, text, -1, out, chars)) out[0] = 0;
+}
+
 static void show_tab(void) {
     int tab = TabCtrl_GetCurSel(tab_control);
     ShowWindow(update_list, tab == 0 ? SW_SHOW : SW_HIDE);
     ShowWindow(hardware_list, tab == 1 ? SW_SHOW : SW_HIDE);
+    ShowWindow(database_summary, tab == 1 ? SW_SHOW : SW_HIDE);
+    ShowWindow(device_sources_button, tab == 1 ? SW_SHOW : SW_HIDE);
+    ShowWindow(source_context, tab == 2 ? SW_SHOW : SW_HIDE);
+    ShowWindow(all_sources_button, tab == 2 ? SW_SHOW : SW_HIDE);
     ShowWindow(source_list, tab == 2 ? SW_SHOW : SW_HIDE);
     ShowWindow(all_button, tab == 0 ? SW_SHOW : SW_HIDE);
     ShowWindow(copy_button, tab == 1 ? SW_SHOW : SW_HIDE);
@@ -966,7 +1096,7 @@ static void create_controls(HWND window) {
     TabCtrl_InsertItem(tab_control, 0, &tab);
     tab.pszText = L"本机硬件";
     TabCtrl_InsertItem(tab_control, 1, &tab);
-    tab.pszText = L"厂商下载来源";
+    tab.pszText = L"驱动来源";
     TabCtrl_InsertItem(tab_control, 2, &tab);
     tab.pszText = L"驱动备份";
     TabCtrl_InsertItem(tab_control, 3, &tab);
@@ -981,20 +1111,22 @@ static void create_controls(HWND window) {
     add_column(hardware_list, 0, L"本机设备", 280);
     add_column(hardware_list, 1, L"硬件 ID", 390);
     add_column(hardware_list, 2, L"当前驱动版本", 140);
-    add_column(hardware_list, 3, L"设备状态", 150);
+    add_column(hardware_list, 3, L"设备状态", 120);
+    add_column(hardware_list, 4, L"离线识别结果 / 型号候选", 360);
+    add_column(hardware_list, 5, L"设备类别", 140);
+    add_column(hardware_list, 6, L"识别依据", 230);
+    add_column(hardware_list, 7, L"来源建议", 300);
+    database_summary = control(window, L"STATIC", L"正在加载离线识别库…", 0, 0);
+    device_sources_button = control(window, L"BUTTON", L"查看设备来源建议", WS_TABSTOP, ID_DEVICE_SOURCES);
     source_list = control(window, WC_LISTVIEWW, L"", LVS_REPORT | LVS_SHOWSELALWAYS | WS_TABSTOP | WS_BORDER, 0);
     ListView_SetExtendedListViewStyle(source_list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     add_column(source_list, 0, L"来源", 150);
     add_column(source_list, 1, L"覆盖设备", 260);
     add_column(source_list, 2, L"接入方式", 200);
     add_column(source_list, 3, L"入口连通性", 170);
-    for (int index = 0; index < (int)ARRAYSIZE(driver_sources); ++index) {
-        LVITEMW item = { .mask = LVIF_TEXT, .iItem = index, .pszText = (WCHAR *)driver_sources[index].name };
-        ListView_InsertItem(source_list, &item);
-        ListView_SetItemText(source_list, index, 1, (WCHAR *)driver_sources[index].devices);
-        ListView_SetItemText(source_list, index, 2, (WCHAR *)driver_sources[index].mode);
-        ListView_SetItemText(source_list, index, 3, L"待检查");
-    }
+    source_context = control(window, L"STATIC", L"全部来源 · 选择具体设备可查看来源建议，型号和系统版本需核对", 0, 0);
+    all_sources_button = control(window, L"BUTTON", L"显示全部来源", WS_TABSTOP, ID_ALL_SOURCES);
+    render_sources();
     check_sources_button = control(window, L"BUTTON", L"检查来源连通性", WS_TABSTOP, ID_CHECK_SOURCES);
     open_source_button = control(window, L"BUTTON", L"打开所选官方来源", WS_TABSTOP, ID_OPEN_SOURCE);
     auto_install_box = control(window, L"BUTTON", L"下载后自动安装", WS_TABSTOP | BS_AUTOCHECKBOX, ID_AUTO_INSTALL);
@@ -1036,8 +1168,12 @@ static void resize_controls(int width, int height) {
     MoveWindow(cancel_button, width - 104, 16, 88, 32, TRUE);
     MoveWindow(tab_control, 16, 62, width - 32, height - 280, TRUE);
     MoveWindow(update_list, 24, 96, width - 48, height - 323, TRUE);
-    MoveWindow(hardware_list, 24, 96, width - 48, height - 323, TRUE);
-    MoveWindow(source_list, 24, 96, width - 48, height - 323, TRUE);
+    MoveWindow(hardware_list, 24, 142, width - 48, height - 369, TRUE);
+    MoveWindow(database_summary, 32, 102, width - 64, 38, TRUE);
+    MoveWindow(device_sources_button, 205, height - 210, 200, 28, TRUE);
+    MoveWindow(source_list, 24, 136, width - 48, height - 363, TRUE);
+    MoveWindow(source_context, 32, 102, width - 64, 32, TRUE);
+    MoveWindow(all_sources_button, 400, height - 210, 160, 28, TRUE);
     MoveWindow(check_sources_button, 16, height - 210, 165, 28, TRUE);
     MoveWindow(open_source_button, 192, height - 210, 190, 28, TRUE);
     MoveWindow(auto_install_box, 205, height - 210, 180, 28, TRUE);
@@ -1063,15 +1199,40 @@ static void resize_controls(int width, int height) {
 static void process_event(Event *event) {
     if (event->kind == EV_RESET) {
         ListView_DeleteAllItems(hardware_list);
+        clear_hardware();
         ListView_DeleteAllItems(update_list);
         clear_candidates();
+        filtering_sources = FALSE;
+        SetWindowTextW(source_context, L"全部来源 · 选择具体设备可查看来源建议，型号和系统版本需核对");
+        render_sources();
     } else if (event->kind == EV_HARDWARE) {
         Hardware *row = event->data;
-        LVITEMW item = { .mask = LVIF_TEXT, .iItem = ListView_GetItemCount(hardware_list), .pszText = row->name };
-        int index = ListView_InsertItem(hardware_list, &item);
-        ListView_SetItemText(hardware_list, index, 1, row->hardware);
-        ListView_SetItemText(hardware_list, index, 2, row->version);
-        ListView_SetItemText(hardware_list, index, 3, row->state);
+        if (remember_hardware(row)) {
+            event->data = NULL;
+            LVITEMW item = { .mask = LVIF_TEXT | LVIF_PARAM, .iItem = ListView_GetItemCount(hardware_list),
+                .pszText = row->name, .lParam = (LPARAM)row };
+            int index = ListView_InsertItem(hardware_list, &item);
+            ListView_SetItemText(hardware_list, index, 1, row->hardware);
+            ListView_SetItemText(hardware_list, index, 2, row->version);
+            ListView_SetItemText(hardware_list, index, 3, row->state);
+            WCHAR model[1024], detail[1200], sources[1024] = L"";
+            utf8_text(row->identity.match.model[0] ? row->identity.match.model : row->identity.match.vendor,
+                      model, ARRAYSIZE(model));
+            if (row->identity.match.tablet_candidates)
+                StringCchPrintfW(detail, ARRAYSIZE(detail), L"%s%s（共 %d 个型号候选）", model,
+                    row->identity.match.tablet_candidates > 3 ? L" …" : L"", row->identity.match.tablet_candidates);
+            else StringCchCopyW(detail, ARRAYSIZE(detail), model[0] ? model : L"型号待补充");
+            ListView_SetItemText(hardware_list, index, 4, detail);
+            ListView_SetItemText(hardware_list, index, 5, row->identity.category);
+            ListView_SetItemText(hardware_list, index, 6, row->identity.basis);
+            for (int key = 0; key < row->identity.match.source_count; ++key) {
+                int provider = source_index(row->identity.match.sources[key]);
+                if (provider < 0) continue;
+                if (sources[0]) StringCchCatW(sources, ARRAYSIZE(sources), L" / ");
+                StringCchCatW(sources, ARRAYSIZE(sources), driver_sources[provider].name);
+            }
+            ListView_SetItemText(hardware_list, index, 7, sources[0] ? sources : L"可使用微软目录或全部来源");
+        }
     } else if (event->kind == EV_UPDATE) {
         Candidate *row = event->data;
         if (candidate_count < MAX_UPDATES) {
@@ -1099,8 +1260,17 @@ static void process_event(Event *event) {
         }
     } else if (event->kind == EV_TRANSFER) {
         SetWindowTextW(transfer_label, event->text);
+    } else if (event->kind == EV_DATABASE) {
+        SetWindowTextW(database_summary, event->text);
     } else if (event->kind == EV_SOURCE_STATUS) {
-        ListView_SetItemText(source_list, event->index, 3, event->text);
+        if (event->index >= 0 && event->index < (int)ARRAYSIZE(driver_sources)) {
+            StringCchCopyW(source_status[event->index], ARRAYSIZE(source_status[0]), event->text);
+            for (int row = 0; row < ListView_GetItemCount(source_list); ++row) {
+                LVITEMW item = { .mask = LVIF_PARAM, .iItem = row };
+                if (ListView_GetItem(source_list, &item) && item.lParam == event->index)
+                    ListView_SetItemText(source_list, row, 3, event->text);
+            }
+        }
     } else if (event->kind == EV_DONE) {
         if (!InterlockedCompareExchange(&quitting, 0, 0)) {
             set_busy(FALSE);
@@ -1162,14 +1332,18 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         case ID_CHECK_SOURCES:
             if (!busy) {
                 Task task = { .command = ID_CHECK_SOURCES };
+                for (size_t index = 0; index < ARRAYSIZE(driver_sources); ++index)
+                    task.source_mask[index] = !filtering_sources || source_filter[index];
                 SetWindowTextW(status_label, L"正在检查官方来源入口连通性…");
                 start_task(&task);
             }
             break;
         case ID_OPEN_SOURCE: {
             int selected = ListView_GetNextItem(source_list, -1, LVNI_SELECTED);
-            if (selected >= 0)
-                ShellExecuteW(window, L"open", driver_sources[selected].url, NULL, NULL, SW_SHOWNORMAL);
+            LVITEMW item = { .mask = LVIF_PARAM, .iItem = selected };
+            if (selected >= 0 && ListView_GetItem(source_list, &item) &&
+                item.lParam >= 0 && item.lParam < (LPARAM)ARRAYSIZE(driver_sources))
+                ShellExecuteW(window, L"open", driver_sources[item.lParam].url, NULL, NULL, SW_SHOWNORMAL);
             break;
         }
         case ID_CANCEL:
@@ -1184,6 +1358,17 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         case ID_BACKUP: start_backup_task(ID_BACKUP); break;
         case ID_RESTORE: start_backup_task(ID_RESTORE); break;
         case ID_COPY: copy_hardware_id(); break;
+        case ID_DEVICE_SOURCES:
+            select_device_sources();
+            show_tab();
+            break;
+        case ID_ALL_SOURCES:
+            if (!busy) {
+                filtering_sources = FALSE;
+                SetWindowTextW(source_context, L"全部来源 · 选择具体设备可查看来源建议，型号和系统版本需核对");
+                render_sources();
+            }
+            break;
         case ID_ALL: {
             BOOL all = TRUE;
             for (int index = 0; index < candidate_count; ++index)
@@ -1217,7 +1402,15 @@ static int window_smoke_test(void) {
     if (!PathCombineW(expected, app_directory, L"驱动备份")) return 8;
     GetWindowTextW(backup_edit, actual, ARRAYSIZE(actual));
     if (wcscmp(expected, actual)) return 9;
-    return SendMessageW(pre_backup_box, BM_GETCHECK, 0, 0) == BST_CHECKED ? 0 : 10;
+    if (SendMessageW(pre_backup_box, BM_GETCHECK, 0, 0) != BST_CHECKED) return 10;
+    HardwareDatabase database;
+    WCHAR summary[1024];
+    HRESULT hr = hardware_database_open(&database, app_directory, summary, ARRAYSIZE(summary));
+    BOOL loaded = hr == S_OK && database.index.usb_products.count > 10000 &&
+                  database.index.pci_devices.count > 10000 && database.index.tablet_count > 400;
+    hardware_database_close(&database);
+    if (!loaded) return 11;
+    return ListView_GetItemCount(source_list) == (int)ARRAYSIZE(driver_sources) ? 0 : 12;
 }
 
 static int self_test(void) {
@@ -1298,6 +1491,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command, int s
     }
     if (worker_handle) { WaitForSingleObject(worker_handle, INFINITE); CloseHandle(worker_handle); }
     clear_candidates();
+    clear_hardware();
+    free(hardware_rows);
     if (ui_font) DeleteObject(ui_font);
     CloseHandle(task_event);
     DeleteCriticalSection(&task_lock);

@@ -25,6 +25,12 @@ jobs:
       - name: Check transfer calculations
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_transfer.c -o build/test_transfer.exe && ./build/test_transfer.exe
+      - name: Check hardware database matching
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_device_db.c native/device_db.c -o build/test_device_db.exe && ./build/test_device_db.exe
+      - name: Check Windows Update callback interfaces
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_wua_callbacks.c native/wua_callbacks.c -o build/test_wua_callbacks.exe -lole32 -luuid && ./build/test_wua_callbacks.exe
       - name: Check native executable
         shell: pwsh
         run: |
@@ -39,7 +45,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: DriverSource-MinGW-Windows-x64
-          path: dist/DriverSource.exe
+          path: |
+            dist/DriverSource.exe
+            dist/database/
 
   windows:
     needs: mingw
@@ -55,6 +63,12 @@ jobs:
       - name: Check transfer calculations
         shell: cmd
         run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_transfer.c /Fo"build\test_transfer.obj" /Fe"build\test_transfer.exe" && build\test_transfer.exe
+      - name: Check hardware database matching
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_device_db.c native\device_db.c /Fobuild\ /Fe"build\test_device_db.exe" && build\test_device_db.exe
+      - name: Check Windows Update callback interfaces
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_wua_callbacks.c native\wua_callbacks.c /Fobuild\ /Fe"build\test_wua_callbacks.exe" /link ole32.lib uuid.lib && build\test_wua_callbacks.exe
       - name: Check hardware API and native window startup
         shell: pwsh
         run: |
@@ -66,16 +80,17 @@ jobs:
             }
             if ($process.ExitCode -ne 0) { throw "$argument failed with $($process.ExitCode)" }
           }
-          $hash = (Get-FileHash dist/DriverSource.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  DriverSource.exe" | Set-Content -Encoding ascii dist/DriverSource.exe.sha256
+          Compress-Archive -Path dist/DriverSource.exe,dist/database,README.md,SOURCES.md -DestinationPath dist/DriverSource-Windows-x64.zip
+          $hash = (Get-FileHash dist/DriverSource-Windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  DriverSource-Windows-x64.zip" | Set-Content -Encoding ascii dist/DriverSource-Windows-x64.zip.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: DriverSource-native-Windows-x64
           path: |
-            dist/DriverSource.exe
-            dist/DriverSource.exe.sha256
+            dist/DriverSource-Windows-x64.zip
+            dist/DriverSource-Windows-x64.zip.sha256
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/DriverSource.exe dist/DriverSource.exe.sha256 --title "驱动源 ${{ github.ref_name }} · C 原生版" --notes-file CHANGELOG.md
+        run: gh release create "${{ github.ref_name }}" dist/DriverSource-Windows-x64.zip dist/DriverSource-Windows-x64.zip.sha256 --title "驱动源 ${{ github.ref_name }} · C 原生版" --notes-file CHANGELOG.md

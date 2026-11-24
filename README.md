@@ -1,10 +1,10 @@
-# 驱动源 · C 原生版 0.1.3
+# 驱动源 · C 原生版 0.1.4
 
 Windows 10/11 x64 驱动检测、下载与安装软件。使用 C17 和 Windows 系统 API 编写。
 
 ## 使用
 
-下载 `releases/DriverSource-0.1.3-x64.zip`，解压并运行 `DriverSource.exe`。Windows 会请求管理员权限，用于安装驱动。压缩包包含可编译的完整项目源码。
+下载 `releases/DriverSource-0.1.4-x64.zip`，解压并运行 `DriverSource.exe`。Windows 会请求管理员权限，用于安装驱动。压缩包包含可编译的完整项目源码和离线识别数据。解压时保留 EXE 旁的 `database` 文件夹。
 
 1. 启动后自动检测本机硬件，并按当前系统版本在线查询适用驱动。
 2. 在“可下载驱动”中勾选需要的项目。默认保存目录为 EXE 所在文件夹下的 `下载`，也可选择其他位置。
@@ -14,7 +14,33 @@ Windows 10/11 x64 驱动检测、下载与安装软件。使用 C17 和 Windows 
 6. Windows 要求重启时，程序提示手动重启并停止处理后续项目。保存工作并重启后，可重新扫描。
 7. “取消”会请求更新服务停止任务。安装结果以更新服务返回的实际结果为准，已完成安装的项目仍会显示成功。
 
-“本机硬件”可查看设备名称、硬件 ID、当前驱动版本及设备问题。“厂商下载来源”包含 29 个候选官方入口，可以在本机检查入口的 HTTP 连通性并打开所选官方来源。
+“本机硬件”可查看设备名称、硬件 ID、当前驱动版本及设备问题。“驱动来源”包含 51 个候选来源入口，可以在本机检查入口的 HTTP 连通性并打开所选官方来源。
+
+## 更新接口兼容性
+
+0.1.4 修正了旧版在 Windows Update 异步接口中传入空回调的问题，搜索、下载和安装均提供有效的 COM 回调对象，并在任务结束后清理引用。
+
+搜索报错会显示具体接口步骤及 HRESULT。异步搜索若返回 E_POINTER，程序会尝试兼容同步查询，该次查询的取消请求会在服务返回后生效。
+
+## 离线硬件识别库
+
+本版打包 USB IDs、PCI IDs 和数位板机型资料，启动后可离线识别硬件标识并提供来源建议。
+
+| 数据 | 数量 |
+| --- | --- |
+| USB 厂商 / 产品 | 3,427 / 20,537 |
+| PCI 厂商 / 设备 / 子系统 | 2,526 / 21,915 / 18,163 |
+| 数位板品牌分组 / 机型名称 / 标识映射 | 28 / 363 / 428 |
+
+数位板资料包括 Wacom、Huion、XP-Pen、UGEE、GAOMON、VEIKK、Xencelabs、Parblo、Artisul、BOSTO 等。USB/PCI 资料还覆盖显卡、网卡、蓝牙、声卡、打印机、扫描仪、摄像头、键鼠、存储控制器、USB 串口等硬件的已知标识。
+
+“本机硬件”会显示离线识别结果、设备类别、识别依据及来源建议。选择设备后点击“查看设备来源建议”，来源列表会按已知厂商或机型候选筛选。可用“显示全部来源”恢复完整列表，连通性检查针对当前列表执行。
+
+识别会检查设备报告的多个硬件 ID 和兼容 ID，并优先保留更具体的 PCI 子系统结果。共享 VID/PID 的数位板显示候选数量和核对提示。设备标识命中用于确认候选与寻找来源，具体驱动仍需核对系统版本、架构及厂商支持条件。
+
+USB 数据快照为 2026.06.26，PCI 数据快照为 2026.11.22。来源提交、原始配置、校验值和许可说明见 [database/README.md](database/README.md)。
+
+构建脚本会自动将识别库复制到 EXE 输出目录。应用的编译与运行使用 C 和现有数据文件，维护者可以用可选脚本重建数位板索引。
 
 ## 下载进度和速度
 
@@ -100,7 +126,7 @@ cmake --build build-gcc
 
 ## 验证范围
 
-Linux 环境已通过 MinGW-w64 警告检查、GCC 静态分析及 CMake 交叉构建，生成 Windows x64 EXE。速度计算的缓存、空闲和计数重置回归检查已通过。真实 Windows 电脑的下载速度、驱动导出、备份导入和安装结果仍需实机验证。
+Linux 环境已通过 MinGW-w64 警告检查、GCC 静态分析及 CMake 交叉构建，生成 Windows x64 EXE。速度计算的缓存、空闲和计数重置回归检查，以及共享数位板 ID、USB/PCI 命名空间、OEM 子系统和无效 ID 的数据库匹配检查已通过。真实 Windows 电脑的搜索接口修复、下载速度、设备识别、驱动导出、备份导入和安装结果仍需实机验证。
 
 提供两个 Windows 检查入口，退出码 0 表示通过：
 
@@ -109,7 +135,7 @@ DriverSource.exe --self-test
 DriverSource.exe --smoke-test
 ```
 
-前者检查设备枚举和 Windows Update 安装器初始化，后者检查原生窗口、新控件、默认下载/备份路径及安装前备份默认选项。这些检查不会执行驱动安装。
+前者检查设备枚举和 Windows Update 安装器初始化，后者检查原生窗口、默认路径、安装前备份默认选项、来源列表及输出目录内的识别库加载。这些检查不会执行驱动安装。
 
 GitHub Actions 分别使用 MSVC 和 MinGW 编译，并运行上述检查。版本标签的 MSVC 构建成功后发布到 Releases。
 
@@ -118,4 +144,18 @@ GitHub Actions 分别使用 MSVC 和 MinGW 编译，并运行上述检查。版�
 ```sh
 gcc -std=c17 -Wall -Wextra -Werror tests/test_transfer.c -o test_transfer
 ./test_transfer
+```
+
+硬件库回归检查可独立运行：
+
+```sh
+gcc -std=c17 -Wall -Wextra -Werror tests/test_device_db.c native/device_db.c -o test_device_db
+./test_device_db
+```
+
+Windows 更新回调的接口与引用计数检查，可在 MinGW-w64 中编译执行：
+
+```bat
+gcc -std=c17 -Wall -Wextra -Werror tests/test_wua_callbacks.c native/wua_callbacks.c -o test_wua_callbacks.exe -lole32 -luuid
+test_wua_callbacks.exe
 ```

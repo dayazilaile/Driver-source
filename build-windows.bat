@@ -26,7 +26,7 @@ where windres >nul 2>nul
 if errorlevel 1 goto missing
 windres -I native native\app.rc -o build\app.o
 if errorlevel 1 exit /b 1
-gcc -std=c17 -Wall -Wextra -Werror -finput-charset=UTF-8 -O2 -municode -mwindows native\main.c native\driver_backup.c build\app.o -o dist\DriverSource.exe -lsetupapi -lcfgmgr32 -lole32 -loleaut32 -lcomctl32 -lshell32 -lshlwapi -ladvapi32 -luser32 -lgdi32 -luuid -lwinhttp
+gcc -std=c17 -Wall -Wextra -Werror -finput-charset=UTF-8 -O2 -municode -mwindows native\main.c native\driver_backup.c native\device_db.c native\hardware_database.c native\wua_callbacks.c build\app.o -o dist\DriverSource.exe -lsetupapi -lcfgmgr32 -lole32 -loleaut32 -lcomctl32 -lshell32 -lshlwapi -ladvapi32 -luser32 -lgdi32 -luuid -lwinhttp
 if errorlevel 1 exit /b 1
 goto done
 
@@ -43,7 +43,7 @@ if errorlevel 1 exit /b 1
 pushd native
 rc /nologo /fo ..\build\app.res app.rc
 if errorlevel 1 goto failed
-cl /nologo /TC /std:c17 /utf-8 /W4 /WX /O2 /MT /D_CRT_SECURE_NO_WARNINGS main.c driver_backup.c ..\build\app.res /Fo..\build\ /Fe"..\dist\DriverSource.exe" /link /SUBSYSTEM:WINDOWS /MANIFEST:NO setupapi.lib cfgmgr32.lib ole32.lib oleaut32.lib comctl32.lib shell32.lib shlwapi.lib advapi32.lib user32.lib gdi32.lib uuid.lib winhttp.lib
+cl /nologo /TC /std:c17 /utf-8 /W4 /WX /O2 /MT /D_CRT_SECURE_NO_WARNINGS main.c driver_backup.c device_db.c hardware_database.c wua_callbacks.c ..\build\app.res /Fo..\build\ /Fe"..\dist\DriverSource.exe" /link /SUBSYSTEM:WINDOWS /MANIFEST:NO setupapi.lib cfgmgr32.lib ole32.lib oleaut32.lib comctl32.lib shell32.lib shlwapi.lib advapi32.lib user32.lib gdi32.lib uuid.lib winhttp.lib
 if errorlevel 1 goto failed
 popd
 goto done
@@ -60,5 +60,10 @@ echo Then run build-windows.bat again.
 exit /b 1
 
 :done
+xcopy /E /I /Y "database" "dist\database" >nul
+if errorlevel 1 (
+    echo Failed to copy the offline hardware database.
+    exit /b 1
+)
 echo Build completed: dist\DriverSource.exe
 exit /b 0

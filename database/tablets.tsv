@@ -1,0 +1,431 @@
+# VID	PID	manufacturer source key	model candidate
+# Derived from OpenTabletDriver configurations. See database/README.md and licenses.
+# A VID/PID match identifies candidates. Additional device-string/report probing may be required.
+0458	5003	-	Genius G-Pen 560
+0458	5010	-	Genius i405x
+0458	501A	-	Genius i608x
+0483	6003	-	RobotPen T9A
+0483	A005	parblo	Parblo Ninos M
+0483	A006	parblo	Parblo Ninos S
+0483	A013	parblo	Parblo Intangbo M
+0483	A014	parblo	Parblo Intangbo S
+0483	A016	parblo	Parblo Intangbo SW
+0483	A019	parblo	Parblo Ninos N4
+0483	A020	parblo	Parblo Ninos N7
+0483	A022	parblo	Parblo A610 Pro (Variant 2)
+0483	A20B	parblo	Parblo Ninos N7B
+0483	A21B	parblo	Parblo Ninos N10B
+0483	A640	parblo	Parblo A640 V2
+0531	0100	wacom	Wacom CTC-4110WL
+0531	0102	wacom	Wacom CTC-6110WL
+0531	0103	wacom	Wacom CTC-6110WL
+0531	0109	wacom	Wacom CTK-4120
+0543	E667	-	ViewSonic Woodpad PF0730
+0543	E668	-	ViewSonic Woodpad PF1030
+056A	0003	wacom	Wacom PTU-600U
+056A	0010	wacom	Wacom ET-0405-U
+056A	0011	wacom	Wacom ET-0405A-U
+056A	0013	wacom	Wacom CTE-430
+056A	0014	wacom	Wacom CTE-630
+056A	0015	wacom	Wacom CTE-440
+056A	0016	wacom	Wacom CTE-640
+056A	0017	wacom	Wacom CTE-450
+056A	0018	wacom	Wacom CTE-650
+056A	0020	wacom	Wacom GD-0405-U
+056A	0021	wacom	Wacom GD-0608-U
+056A	0022	wacom	Wacom GD-0912-U
+056A	0023	wacom	Wacom GD-1212-U
+056A	0024	wacom	Wacom GD-1218-U
+056A	0026	wacom	Wacom PTH-450
+056A	0027	wacom	Wacom PTH-650
+056A	0028	wacom	Wacom PTH-850
+056A	0029	wacom	Wacom PTK-450
+056A	002A	wacom	Wacom PTK-650
+056A	0035	wacom	Wacom Cintiq 18SX (PL-800-U)
+056A	003F	wacom	Wacom Cintiq 21UX (DTZ-2100)
+056A	0041	wacom	Wacom XD-0405-U
+056A	0042	wacom	Wacom XD-0608-U
+056A	0043	wacom	Wacom XD-0912-U
+056A	0044	wacom	Wacom XD-1212-U
+056A	0045	wacom	Wacom XD-1218-U
+056A	005B	wacom	Wacom Cintiq 22HD Touch (DTH-2200)
+056A	0060	wacom	Wacom FT-0405-U
+056A	0065	wacom	Wacom MTE-450
+056A	0069	wacom	Wacom CTF-430
+056A	006A	wacom	Wacom CTE-460
+056A	006B	wacom	Wacom CTE-660
+056A	00B0	wacom	Wacom PTZ-430
+056A	00B1	wacom	Wacom PTZ-630
+056A	00B2	wacom	Wacom PTZ-930
+056A	00B3	wacom	Wacom PTZ-1230
+056A	00B4	wacom	Wacom PTZ-1231W
+056A	00B5	wacom	Wacom PTZ-631W
+056A	00B7	wacom	Wacom PTZ-431W
+056A	00B8	wacom	Wacom PTK-440
+056A	00B9	wacom	Wacom PTK-640
+056A	00BA	wacom	Wacom PTK-840
+056A	00BB	wacom	Wacom PTK-1240
+056A	00BC	wacom	Wacom PTK-540WL
+056A	00C6	wacom	Wacom Cintiq 12WX (DTZ-1200W)
+056A	00CC	wacom	Wacom Cintiq 21UX (DTK-2100)
+056A	00D1	wacom	Wacom CTH-460
+056A	00D2	wacom	Wacom CTH-461
+056A	00D3	wacom	Wacom CTH-661
+056A	00D4	wacom	Wacom CTL-460
+056A	00D6	wacom	Wacom CTH-460
+056A	00D7	wacom	Wacom CTH-461
+056A	00D8	wacom	Wacom CTH-661
+056A	00DA	wacom	Wacom CTH-461
+056A	00DB	wacom	Wacom CTH-661
+056A	00DD	wacom	Wacom CTL-470
+056A	00DE	wacom	Wacom CTH-470
+056A	00DF	wacom	Wacom CTH-670
+056A	00F9	wacom	Wacom Cintiq 22HD (DTK-2200)
+056A	00FA	wacom	Wacom Cintiq 22HD (DTK-2200)
+056A	0300	wacom	Wacom CTL-471
+056A	0301	wacom	Wacom CTL-671
+056A	0302	wacom	Wacom CTH-480
+056A	0303	wacom	Wacom CTH-680
+056A	0304	wacom	Wacom Cintiq 13HD (DTK-1300)
+056A	030E	wacom	Wacom CTL-480
+056A	0314	wacom	Wacom PTH-451
+056A	0315	wacom	Wacom PTH-651
+056A	0317	wacom	Wacom PTH-851
+056A	0318	wacom	Wacom CTH-301
+056A	0319	wacom	Wacom CTH-300
+056A	0323	wacom	Wacom CTL-680
+056A	032A	wacom	Wacom Cintiq 27QHD (DTH-2700)
+056A	032B	wacom	Wacom Cintiq 27QHD (DTH-2700)
+056A	0333	wacom	Wacom Cintiq 13HD Touch (DTH-1300)
+056A	033B	wacom	Wacom CTL-490
+056A	033C	wacom	Wacom CTH-490
+056A	033D	wacom	Wacom CTL-690
+056A	033E	wacom	Wacom CTH-690
+056A	034F	wacom	Wacom DTH-1320
+056A	0352	wacom	Wacom Cintiq Pro 32 (DTH-3220)
+056A	0357	wacom	Wacom PTH-660
+056A	0358	wacom	Wacom PTH-860
+056A	0360	wacom	Wacom PTH-660
+056A	0374	wacom	Wacom CTL-4100
+056A	0375	wacom	Wacom CTL-6100
+056A	0376	wacom	Wacom CTL-4100WL
+056A	0377	wacom	Wacom CTL-4100WL
+056A	0378	wacom	Wacom CTL-6100WL
+056A	037A	wacom	Wacom CTL-472
+056A	037B	wacom	Wacom CTL-672
+056A	0390	wacom	Wacom Cintiq 16 (DTK-1660)
+056A	0392	wacom	Wacom PTH-460
+056A	03A6	wacom	Wacom DTC-133
+056A	03AE	wacom	Wacom Cintiq 16 (DTK-1660)
+056A	03C0	wacom	Wacom Cintiq Pro 27 (DTH-271)
+056A	03C5	wacom	Wacom CTL-4100WL
+056A	03C7	wacom	Wacom CTL-6100WL
+056A	03CE	wacom	Wacom DTC-121
+056A	03D0	wacom	Wacom Cintiq Pro 22 (DTH-227)
+056A	03DC	wacom	Wacom PTH-460
+056A	03F0	wacom	Wacom Movink 13 (DTH-135)
+056A	03F5	wacom	Wacom PTK-470
+056A	03F7	wacom	Wacom PTK-670
+056A	03F9	wacom	Wacom PTK-870
+08CA	0010	-	LifeTec LT9570
+0A12	4007	-	FlooGoo FMA100
+0B57	9091	parblo	Parblo A609
+0ED1	7821	bosto	Bosto BT-12HD
+172F	0032	-	Waltop Slim Tablet 5.8"
+172F	0037	-	Trust Flex Design Tablet
+172F	0038	-	Genius G-Pen F509
+172F	0501	-	Silvercrest SGT 10.6 A2
+256C	0060	huion	Huion Q630M
+256C	0061	huion	Huion G930L
+256C	0064	artisul	Artisul A1201
+256C	0064	gaomon	Gaomon 1060 Pro
+256C	0064	gaomon	Gaomon M5
+256C	0064	gaomon	Gaomon M6
+256C	0064	gaomon	Gaomon M7
+256C	0064	gaomon	Gaomon M8
+256C	0064	gaomon	Gaomon M8 (Variant 2)
+256C	0064	huion	Huion H1060P
+256C	0064	huion	Huion H1161
+256C	0064	huion	Huion H420X
+256C	0064	huion	Huion H430P
+256C	0064	huion	Huion H580X
+256C	0064	huion	Huion H610 Pro V2
+256C	0064	huion	Huion H610X
+256C	0064	huion	Huion H640P
+256C	0064	huion	Huion H642
+256C	0064	huion	Huion H950P
+256C	0064	huion	Huion HC16
+256C	0064	huion	Huion HC16 (Variant 2)
+256C	0064	huion	Huion HS610
+256C	0064	huion	Huion RTE-100
+256C	0064	huion	Huion RTM-500
+256C	0064	huion	Huion RTP-700
+256C	0066	huion	Huion H641P
+256C	0067	huion	Huion H951P
+256C	0068	huion	Huion H1061P
+256C	006B	huion	Huion Kamvas Pro 19 (4K)
+256C	006C	huion	Huion Kamvas Pro 24 (Gen 3)
+256C	006C	huion	Huion Kamvas Pro 27
+256C	006D	artisul	Artisul A1201
+256C	006D	artisul	Artisul A801
+256C	006D	artisul	Artisul D16 Pro
+256C	006D	gaomon	Gaomon 1060 Pro
+256C	006D	gaomon	Gaomon GM116HD
+256C	006D	gaomon	Gaomon GM156HD
+256C	006D	gaomon	Gaomon GM156HD (16K)
+256C	006D	gaomon	Gaomon M106K Pro
+256C	006D	gaomon	Gaomon M10K Pro
+256C	006D	gaomon	Gaomon M1220
+256C	006D	gaomon	Gaomon M1230
+256C	006D	gaomon	Gaomon M6
+256C	006D	gaomon	Gaomon PD1161
+256C	006D	gaomon	Gaomon PD1320
+256C	006D	gaomon	Gaomon PD156 Pro
+256C	006D	gaomon	Gaomon PD1561
+256C	006D	gaomon	Gaomon PD2200
+256C	006D	gaomon	Gaomon S56K
+256C	006D	gaomon	Gaomon S620
+256C	006D	gaomon	Gaomon S630
+256C	006D	gaomon	Gaomon S830
+256C	006D	huion	Huion GC610
+256C	006D	huion	Huion H1060P
+256C	006D	huion	Huion H1161
+256C	006D	huion	Huion H320M
+256C	006D	huion	Huion H420X
+256C	006D	huion	Huion H430P
+256C	006D	huion	Huion H580X
+256C	006D	huion	Huion H610 Pro
+256C	006D	huion	Huion H610 Pro V2
+256C	006D	huion	Huion H610X
+256C	006D	huion	Huion H640P
+256C	006D	huion	Huion H642
+256C	006D	huion	Huion H950P
+256C	006D	huion	Huion HC16
+256C	006D	huion	Huion HS610
+256C	006D	huion	Huion HS611
+256C	006D	huion	Huion HS64
+256C	006D	huion	Huion HS95
+256C	006D	huion	Huion KD200
+256C	006D	huion	Huion Kamvas 12
+256C	006D	huion	Huion Kamvas 13
+256C	006D	huion	Huion Kamvas 16
+256C	006D	huion	Huion Kamvas 16 (2021)
+256C	006D	huion	Huion Kamvas 22
+256C	006D	huion	Huion Kamvas 22 Plus
+256C	006D	huion	Huion Kamvas 24
+256C	006D	huion	Huion Kamvas 24 Plus
+256C	006D	huion	Huion Kamvas Pro 12
+256C	006D	huion	Huion Kamvas Pro 13
+256C	006D	huion	Huion Kamvas Pro 13 (2.5k)
+256C	006D	huion	Huion Kamvas Pro 16
+256C	006D	huion	Huion Kamvas Pro 16 (2.5k)
+256C	006D	huion	Huion Kamvas Pro 16 (4k)
+256C	006D	huion	Huion Kamvas Pro 16 Plus (4k)
+256C	006D	huion	Huion Kamvas Pro 24 (4K)
+256C	006D	huion	Huion New 1060 Plus
+256C	006D	huion	Huion Note X10
+256C	006D	huion	Huion Q11K
+256C	006D	huion	Huion Q620M
+256C	006D	huion	Huion RDS-160
+256C	006D	huion	Huion RTM-500
+256C	006D	huion	Huion RTP-700
+256C	006E	-	Monoprice 10594
+256C	006E	-	Monoprice 21826
+256C	006E	-	Turcom TS-6580
+256C	006E	artisul	Artisul D22S
+256C	006E	artisul	Artisul M0610 Pro
+256C	006E	gaomon	Gaomon 1060 Pro
+256C	006E	gaomon	Gaomon M106K
+256C	006E	gaomon	Gaomon M10K
+256C	006E	gaomon	Gaomon PD1560
+256C	006E	gaomon	Gaomon PD2200
+256C	006E	gaomon	Gaomon S56K
+256C	006E	huion	Huion 1060 Plus
+256C	006E	huion	Huion 420
+256C	006E	huion	Huion G10T
+256C	006E	huion	Huion GC610
+256C	006E	huion	Huion GT-156HD
+256C	006E	huion	Huion GT-156HD V2
+256C	006E	huion	Huion GT-191 V2
+256C	006E	huion	Huion GT-220 V2
+256C	006E	huion	Huion GT-220 V2 (2048)
+256C	006E	huion	Huion GT-221
+256C	006E	huion	Huion GT-221 Pro
+256C	006E	huion	Huion H1060P
+256C	006E	huion	Huion H420
+256C	006E	huion	Huion H430P
+256C	006E	huion	Huion H610 Pro
+256C	006E	huion	Huion H610 Pro V2
+256C	006E	huion	Huion H610 Pro V3
+256C	006E	huion	Huion H640P
+256C	006E	huion	Huion H690
+256C	006E	huion	Huion H950P
+256C	006E	huion	Huion HS64
+256C	006E	huion	Huion Kamvas 20
+256C	006E	huion	Huion Kamvas Pro 12
+256C	006E	huion	Huion Kamvas Pro 13
+256C	006E	huion	Huion Kamvas Pro 20
+256C	006E	huion	Huion Kamvas Pro 22 (2019)
+256C	006E	huion	Huion Kamvas Pro 24
+256C	006E	huion	Huion New 1060 Plus
+256C	006E	huion	Huion New 1060 Plus (2048)
+256C	006E	huion	Huion Q11K
+256C	006E	huion	Huion Q11K V2
+256C	006E	huion	Huion WH1409
+256C	006E	huion	Huion WH1409 V2
+256C	006E	huion	Huion WH1409 V2 (Variant 2)
+256C	006F	artisul	Artisul M0610 Pro
+256C	006F	gaomon	Gaomon M106K Pro
+256C	006F	gaomon	Gaomon M10K
+256C	006F	gaomon	Gaomon M10K Pro
+256C	006F	gaomon	Gaomon M1230
+256C	006F	gaomon	Gaomon S620
+256C	006F	gaomon	Gaomon S620 (16K)
+256C	006F	gaomon	Gaomon S830
+256C	006F	huion	Huion H320M
+256C	006F	huion	Huion H430P
+256C	006F	huion	Huion H950P
+256C	006F	huion	Huion H950P (16K)
+256C	006F	huion	Huion HS611
+256C	006F	huion	Huion HS64
+256C	2000	huion	Huion Kamvas Pro 16 V2
+256C	2001	huion	Huion RDS-220
+256C	2003	gaomon	Gaomon WH851
+256C	2004	gaomon	Gaomon 1060 Pro
+256C	2008	huion	Huion Kamvas 13 (Gen 3)
+256C	2009	huion	Huion Kamvas 16 (Gen 3)
+256C	200E	gaomon	Gaomon M5 V2
+256C	2011	huion	Huion L310
+256C	2012	huion	Huion L610
+28BD	000B	xppen	XP-Pen Artist 13.3
+28BD	000C	xppen	XP-Pen Artist 15.6
+28BD	0042	xppen	XP-Pen Deco 01
+28BD	0061	xppen	XP-Pen Star G540 Pro
+28BD	0062	xppen	XP-Pen Star 06C
+28BD	0071	xppen	XP-Pen Star 05 V3
+28BD	0075	xppen	XP-Pen Star G430
+28BD	0075	xppen	XP-Pen Star G430S
+28BD	0075	xppen	XP-Pen Star G540
+28BD	0077	xppen	XP-Pen Star 03 Pro
+28BD	0078	xppen	XP-Pen Star 06
+28BD	0094	xppen	XP-Pen Star G640
+28BD	0096	xppen	XP-Pen Deco 03
+28BD	0803	xppen	XP-Pen Deco 02
+28BD	080A	xppen	XP-Pen Artist 12
+28BD	0902	xppen	XP-Pen Deco 01 V2
+28BD	0902	xppen	XP-Pen Deco 01 V2 (Variant 2)
+28BD	0904	xppen	XP-Pen Deco Pro Medium
+28BD	0905	xppen	XP-Pen Deco 01 V2
+28BD	0905	xppen	XP-Pen Deco 01 V2 (Variant 2)
+28BD	0906	xppen	XP-Pen Star G640S
+28BD	0907	xppen	XP-Pen Star 03
+28BD	0907	xppen	XP-Pen Star 03 V2
+28BD	0909	xppen	XP-Pen Deco Pro Small
+28BD	090D	xppen	XP-Pen Artist 15.6 Pro
+28BD	0910	-	Adesso Cybertablet K8
+28BD	0913	xppen	XP-Pen Star G430S
+28BD	0913	xppen	XP-Pen Star G430S V2
+28BD	0914	xppen	XP-Pen Star G640
+28BD	0914	xppen	XP-Pen Star G640 (Variant 2)
+28BD	0917	xppen	XP-Pen Star G960S
+28BD	0918	xppen	XP-Pen Star G960S Plus
+28BD	091A	xppen	XP-Pen Artist 15.6
+28BD	091B	xppen	XP-Pen Artist 22R Pro
+28BD	091F	xppen	XP-Pen Artist 12 Pro
+28BD	0920	xppen	XP-Pen Star G960
+28BD	0924	ugee	UGEE M708 V2
+28BD	0924	ugee	UGEE M708 V3
+28BD	0928	xppen	XP-Pen Deco mini7
+28BD	0929	xppen	XP-Pen Deco mini4
+28BD	092B	xppen	XP-Pen Artist 13.3 Pro
+28BD	092C	xppen	XP-Pen Innovator 16
+28BD	092D	xppen	XP-Pen Artist 24 Pro
+28BD	092E	xppen	XP-Pen Artist Pro 16TP
+28BD	092F	xppen	XP-Pen Artist 22 (2nd Gen)
+28BD	0930	xppen	XP-Pen Deco Fun XS (CT430)
+28BD	0931	xppen	XP-Pen Deco Fun S (CT640)
+28BD	0932	xppen	XP-Pen Deco Fun L (CT1060)
+28BD	0933	xppen	XP-Pen Deco Pro SW
+28BD	0934	xppen	XP-Pen Deco Pro MW
+28BD	0935	xppen	XP-Pen Deco L
+28BD	0935	xppen	XP-Pen Deco LW
+28BD	0935	xppen	XP-Pen Deco LW (Variant 2)
+28BD	0936	xppen	XP-Pen Deco M
+28BD	0936	xppen	XP-Pen Deco MW
+28BD	0937	ugee	UGEE S640
+28BD	0938	ugee	UGEE S1060
+28BD	093A	xppen	XP-Pen Artist 24
+28BD	093B	ugee	UGEE U1200
+28BD	093C	ugee	UGEE U1600
+28BD	0942	xppen	XP-Pen Deco Pro MW Gen2
+28BD	0943	xppen	XP-Pen Deco Pro LW Gen2
+28BD	0944	xppen	XP-Pen Deco Pro XLW Gen2
+28BD	0947	xppen	XP-Pen Deco 01 V3
+28BD	0947	xppen	XP-Pen Deco 01 V3 (Variant 2)
+28BD	0948	xppen	XP-Pen Deco mini7 V2
+28BD	0949	xppen	XP-Pen Deco mini7W V2
+28BD	094A	xppen	XP-Pen Artist 12 (2nd Gen)
+28BD	094B	xppen	XP-Pen Artist 16 Pro
+28BD	094C	xppen	XP-Pen Artist 16 (2nd Gen)
+28BD	094D	xppen	XP-Pen Artist 10 (2nd Gen)
+28BD	094E	xppen	XP-Pen Artist 13 (2nd Gen)
+28BD	095A	xppen	XP-Pen Artist Pro 14 (Gen2)
+28BD	095B	xppen	XP-Pen Artist Pro 16 (Gen2)
+28BD	095C	xppen	XP-Pen Artist Pro 24 (Gen2)
+28BD	095D	xppen	XP-Pen Artist Ultra 16
+28BD	096A	xppen	XP-Pen Artist Pro 19 (Gen2)
+28BD	096B	xppen	XP-Pen Artist Pro 22 (Gen2)
+28BD	096E	xppen	XP-Pen Artist 13.3 Pro V2
+28BD	096F	xppen	XP-Pen Artist 15.6 Pro V2
+28BD	098A	xppen	XP-Pen Artist Ultra 14
+28BD	1901	parblo	Parblo A610 Plus
+28BD	1903	parblo	Parblo A610 Pro
+28BD	2902	ugee	UGEE M908
+28BD	2903	ugee	UGEE M808
+28BD	2904	xppen	XP-Pen Deco 640 (IT640)
+28BD	290C	ugee	UGEE UE16
+28BD	5201	xencelabs	XenceLabs Pen Tablet Medium
+28BD	5204	xencelabs	XenceLabs Pen Tablet Small
+2D80	2001	-	XENX P3-1060
+2D80	2002	-	XENX P1-640
+2D80	3011	-	Fansjoy FJ-S1
+2D80	6001	-	XENX X1-640
+2FEB	0001	veikk	VEIKK S640
+2FEB	0001	veikk	VEIKK S640 V2
+2FEB	0002	veikk	VEIKK A30
+2FEB	0002	veikk	VEIKK A30 V2
+2FEB	0003	veikk	VEIKK A50
+2FEB	0003	veikk	VEIKK A50 (Variant 2)
+2FEB	0004	veikk	VEIKK A15
+2FEB	0004	veikk	VEIKK A15 V2
+2FEB	0005	veikk	VEIKK VK640
+2FEB	0006	veikk	VEIKK A15 Pro
+2FEB	0007	veikk	VEIKK VK1060PRO
+2FEB	0008	veikk	VEIKK VK1060
+2FEB	0009	veikk	VEIKK VK430
+2FEB	0009	veikk	VEIKK VK430 V2
+2FEB	000B	veikk	VEIKK Voila (VO1060)
+2FEB	0020	veikk	VEIKK VK850
+2FEB	1004	-	XOPPOX D161
+2FEB	1005	veikk	VEIKK VK1200
+2FEB	1006	veikk	VEIKK VK2200PRO
+5543	0004	-	KENTING K5540
+5543	0042	-	UC-Logic PF1209
+5543	0047	artisul	Artisul D16
+5543	0047	xppen	XP-Pen Artist 22HD
+5543	004A	xppen	XP-Pen Artist 10S
+5543	004D	xppen	XP-Pen Artist 16
+5543	0050	xppen	XP-Pen Star 02
+5543	0054	artisul	Artisul AP604
+5543	0061	parblo	Parblo A640
+5543	0071	-	UC-Logic TWMNA62
+5543	0081	-	UC-Logic 1060N
+5543	0081	artisul	Artisul M0610
+5543	0081	artisul	Artisul M0610 Pro
+5543	0081	parblo	Parblo A610
+5543	0081	ugee	UGEE M708
+5543	0082	-	Acepen AP1060
+5543	0091	-	Acepen AP906
+5543	0781	-	Monoprice MP1060-HA60
+6161	4D15	-	LetSketch WP9620C
+6161	4D15	-	LetSketch WP9622C
