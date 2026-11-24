@@ -21,7 +21,23 @@ int main(void) {
     package.bytes = ((uint64_t)info.nFileSizeHigh << 32) | info.nFileSizeLow;
     package.sha256 = hash;
     HRESULT hr = vendor_extract_package(&package, root, never_cancel, inf, ARRAYSIZE(inf));
-    if (FAILED(hr)) printf("::error::CAB extraction returned 0x%08lX\n", (unsigned long)hr);
+    if (FAILED(hr)) {
+        printf("::error::CAB extraction returned 0x%08lX\n", (unsigned long)hr);
+        FILE *log = fopen("build/cab test/extract.log", "rb");
+        if (log) {
+            char text[3001]; size_t count = fread(text, 1, sizeof(text) - 1, log); fclose(log);
+            for (size_t i = 0; i < count; ++i) if ((unsigned char)text[i] < 32 || (unsigned char)text[i] > 126) text[i] = '|';
+            text[count] = 0;
+            printf("::error::CAB fixture tool log: %s\n", text);
+        }
+        WIN32_FIND_DATAW entry;
+        assert(SUCCEEDED(StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\extracted\\*", root)));
+        HANDLE find = FindFirstFileW(path, &entry);
+        if (find != INVALID_HANDLE_VALUE) {
+            do { wprintf(L"::error::CAB fixture output member: %s\n", entry.cFileName); } while (FindNextFileW(find, &entry));
+            FindClose(find);
+        }
+    }
     assert(SUCCEEDED(hr));
     assert(!wcscmp(PathFindFileNameW(inf), L"*.inf"));
     assert(SUCCEEDED(StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\extracted\\fixture.inf", root)));
