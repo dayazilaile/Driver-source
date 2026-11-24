@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(DriverSource VERSION 0.1.4 LANGUAGES C RC)
+project(DriverSource VERSION 0.1.5 LANGUAGES C RC)
 
 if(NOT WIN32)
     message(FATAL_ERROR "Use a Windows compiler or a Windows cross-compilation toolchain.")

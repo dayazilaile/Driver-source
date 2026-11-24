@@ -26,7 +26,7 @@
 #include "hardware_database.h"
 #include "wua_callbacks.h"
 
-#define APP_VERSION L"0.1.4"
+#define APP_VERSION L"0.1.5"
 /* IID from the Windows SDK, also usable with MinGW's base wuapi.h. */
 static const GUID driver_update_iid = {0xb383cd1a, 0x5ce9, 0x4504, {0x9f,0x63,0x76,0x4b,0x12,0x36,0xf1,0x91}};
 #define MAX_UPDATES 2048

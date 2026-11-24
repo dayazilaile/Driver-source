@@ -1,10 +1,10 @@
-# 驱动源 · C 原生版 0.1.4
+# 驱动源 · C 原生版 0.1.5
 
 Windows 10/11 x64 驱动检测、下载与安装软件。使用 C17 和 Windows 系统 API 编写。
 
 ## 使用
 
-下载 `releases/DriverSource-0.1.4-x64.zip`，解压并运行 `DriverSource.exe`。Windows 会请求管理员权限，用于安装驱动。压缩包包含可编译的完整项目源码和离线识别数据。解压时保留 EXE 旁的 `database` 文件夹。
+下载 `releases/DriverSource-0.1.5-x64.zip`，解压并运行 `DriverSource.exe`。Windows 会请求管理员权限，用于安装驱动。压缩包包含可编译的完整项目源码和离线识别数据。解压时保留 EXE 旁的 `database` 文件夹。
 
 1. 启动后自动检测本机硬件，并按当前系统版本在线查询适用驱动。
 2. 在“可下载驱动”中勾选需要的项目。默认保存目录为 EXE 所在文件夹下的 `下载`，也可选择其他位置。
@@ -126,7 +126,7 @@ cmake --build build-gcc
 
 ## 验证范围
 
-Linux 环境已通过 MinGW-w64 警告检查、GCC 静态分析及 CMake 交叉构建，生成 Windows x64 EXE。速度计算的缓存、空闲和计数重置回归检查，以及共享数位板 ID、USB/PCI 命名空间、OEM 子系统和无效 ID 的数据库匹配检查已通过。真实 Windows 电脑的搜索接口修复、下载速度、设备识别、驱动导出、备份导入和安装结果仍需实机验证。
+Linux 环境已通过 MinGW-w64 警告检查、GCC 静态分析及 CMake 交叉构建，生成 Windows x64 EXE。GitHub Windows runner 已通过 MinGW-w64 与 MSVC 构建、数据库匹配、速度采样、回调接口与引用计数、真实 Windows Update 离线 BeginSearch 及窗口检查。速度计算的缓存、空闲和计数重置回归检查，以及共享数位板 ID、USB/PCI 命名空间、OEM 子系统和无效 ID 的数据库匹配检查已通过。用户电脑上的在线查询、实际外设识别、下载速度、厂商包适配、备份导入和安装结果仍需实机验证。
 
 提供两个 Windows 检查入口，退出码 0 表示通过：
 
