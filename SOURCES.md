@@ -1,10 +1,16 @@
 # 驱动来源核查
 
-核查日期为 2026-11-24。软件收录 51 个候选来源入口。0.2.0 的自动匹配与安装使用本地厂商包目录及独立 HTTPS 下载。
+核查日期为 2026-11-24。软件收录 51 个候选来源入口。0.3.0 的自动匹配与安装使用本地厂商包目录及独立 HTTPS 下载。
 
 云环境网络白名单拦截厂商域名，已观察到的请求错误为 CONNECT 403。以下入口的实际驱动包可用性和国内下载速度尚未验证。软件提供本机连通性检查，检查结果展示 HTTP 状态或 Windows 网络错误码。
 
-## 已接入的实际安装包
+## 已接入的整机目录
+
+新增 `database/oem-packages.tsv` 包含 3,777 条机型与系统记录，来自 OSDeploy/OSD 保存的联想及戴尔官方目录快照。约覆盖 500 个联想型号名称、428 个戴尔型号名称；同型号不同系统和标识别名会产生多条记录。
+
+原始 XML、GPL-3.0 许可、上游提交和文件 SHA-256 见 [来源记录](database/oem-snapshots/README.md)。新增包的实际可下载性、厂商节点地域和实机安装仍需验证。运行时对所有包执行 SHA-256 校验，下载 EXE 不会自动执行。
+
+## 已在线核验的单设备安装包
 
 | 包 | 精确硬件 ID | 版本 | 原始发布 |
 | --- | --- | --- | --- |
@@ -17,7 +23,7 @@
 
 ## 机型驱动包目录
 
-以下三个目录地址在 OSDeploy/OSD 的目录获取实现中有明确引用，包含整机部署驱动包的机型索引。厂商目录当前未接入自动匹配、下载与安装。
+以下三个目录地址在 OSDeploy/OSD 的目录获取实现中有明确引用，包含整机部署驱动包的机型索引。联想、戴尔目录快照已接入自动整机匹配。下载仍使用源厂商地址，EXE 包仅下载，戴尔 CAB 可提交 INF 匹配安装。惠普目录尚未接入。
 
 - 联想目录地址的引用见 [上游代码](https://github.com/OSDeploy/OSD/blob/1bf395f2b673b2874992716a776c0be4a8c98c6e/Private/core-driverpack/Get-OSDCoreDriverPackCatalogLenovo.ps1)。
 - 戴尔目录地址的引用见 [上游代码](https://github.com/OSDeploy/OSD/blob/1bf395f2b673b2874992716a776c0be4a8c98c6e/Private/core-driverpack/Get-OSDCoreDriverPackCatalogDell.ps1)。
@@ -29,8 +35,8 @@
 
 | 来源 | 覆盖范围 | 接入方式 | 状态 |
 | --- | --- | --- | --- |
-| [联想机型驱动包目录](https://download.lenovo.com/cdrt/td/catalogv2.xml) | 联想商用机型、部署驱动包 | 机型目录，待自动接入 | 目录地址有上游引用，直连被代理拦截 |
-| [戴尔机型驱动包目录](https://downloads.dell.com/catalog/DriverPackCatalog.cab) | Dell 商用整机驱动包 | 机型目录，待自动接入 | 目录地址有上游引用，直连被代理拦截 |
+| [联想机型驱动包目录](https://download.lenovo.com/cdrt/td/catalogv2.xml) | 联想商用机型、部署驱动包 | 整机目录快照匹配，EXE 仅下载 | 原始目录快照已核验，实际包直连被代理拦截 |
+| [戴尔机型驱动包目录](https://downloads.dell.com/catalog/DriverPackCatalog.cab) | Dell 商用整机驱动包 | 整机目录快照匹配，CAB 支持 INF 安装 | 原始目录快照已核验，实际包直连被代理拦截 |
 | [惠普机型驱动包目录](https://hpia.hpcloud.hp.com/downloads/driverpackcatalog/HPClientDriverPackCatalog.cab) | HP 商用整机驱动包 | 机型目录，待自动接入 | 目录地址有上游引用，直连被代理拦截 |
 | [联想中国](https://newsupport.lenovo.com.cn/) | 整机、ThinkPad、主板 | 厂商支持页 | 入口待设备与系统适配核验 |
 | [华为中国](https://consumer.huawei.com/cn/support/driver-list/) | MateBook、整机 | 厂商支持页 | 入口待设备与系统适配核验 |

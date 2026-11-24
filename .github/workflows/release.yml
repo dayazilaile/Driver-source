@@ -31,6 +31,20 @@ jobs:
       - name: Check vendor catalog matching
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_vendor_catalog.c native/vendor_catalog.c -o build/test_vendor_catalog.exe && ./build/test_vendor_catalog.exe
+      - name: Check OEM manufacturer and system matching
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_oem_catalog.c native/oem_catalog.c native/vendor_catalog.c -o build/test_oem_catalog.exe && ./build/test_oem_catalog.exe
+      - name: Prepare harmless CAB fixture
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force 'build/cab test' | Out-Null
+          '[Version]' | Set-Content -Encoding ascii 'build/cab test/fixture.inf'
+          & "$env:WINDIR/System32/makecab.exe" 'build/cab test/fixture.inf' 'build/cab test/package.cab'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          (Get-FileHash 'build/cab test/package.cab' -Algorithm SHA256).Hash.ToLower() | Set-Content -Encoding ascii 'build/cab test/hash.txt'
+      - name: Check native CAB extraction and EXE execution refusal
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_vendor_cab.c native/vendor_catalog.c native/vendor_download.c -o build/test_vendor_cab.exe -lwinhttp -lbcrypt -lshlwapi -lshell32 -lole32 && ./build/test_vendor_cab.exe
       - name: Check vendor download and verification
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_vendor_windows.c native/vendor_catalog.c native/vendor_download.c -o build/test_vendor_windows.exe -lwinhttp -lbcrypt -lshlwapi -lshell32 -lole32 && ./build/test_vendor_windows.exe --online
@@ -88,6 +102,20 @@ jobs:
       - name: Check vendor catalog matching
         shell: cmd
         run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_vendor_catalog.c native\vendor_catalog.c /Fobuild\ /Fe"build\test_vendor_catalog.exe" && build\test_vendor_catalog.exe
+      - name: Check OEM manufacturer and system matching
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_oem_catalog.c native\oem_catalog.c native\vendor_catalog.c /Fobuild\ /Fe"build\test_oem_catalog.exe" && build\test_oem_catalog.exe
+      - name: Prepare harmless CAB fixture
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force 'build/cab test' | Out-Null
+          '[Version]' | Set-Content -Encoding ascii 'build/cab test/fixture.inf'
+          & "$env:WINDIR/System32/makecab.exe" 'build/cab test/fixture.inf' 'build/cab test/package.cab'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          (Get-FileHash 'build/cab test/package.cab' -Algorithm SHA256).Hash.ToLower() | Set-Content -Encoding ascii 'build/cab test/hash.txt'
+      - name: Check native CAB extraction and EXE execution refusal
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_vendor_cab.c native\vendor_catalog.c native\vendor_download.c /Fobuild\ /Fe"build\test_vendor_cab.exe" /link winhttp.lib bcrypt.lib shlwapi.lib shell32.lib ole32.lib && build\test_vendor_cab.exe
       - name: Check vendor download and verification
         shell: cmd
         run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_vendor_windows.c native\vendor_catalog.c native\vendor_download.c /Fobuild\ /Fe"build\test_vendor_windows.exe" /link winhttp.lib bcrypt.lib shlwapi.lib shell32.lib ole32.lib && build\test_vendor_windows.exe --online

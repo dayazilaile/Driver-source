@@ -66,3 +66,9 @@ provenance.json 记录固定提交、统计和 SHA-256。source-checks.json 记�
 本版支持平面目标 INF 的 ZIP 包，全部归档内容解压到独立目录，供 INF 引用配套文件。扩充目录前必须核验所有成员路径、INF、CAT 和系统条件。当前包含 2 个乐鑫官方发布包，原始核查记录见 `vendor-packages-provenance.json`；其中 JTAG 的 `%DeviceID%` 替换为 INF Strings 节的 `VID_303A&PID_1001&MI_02` 后匹配。
 
 维护检查 `python scripts/verify_vendor_packages.py` 不修改目录、不安装驱动。USB/PCI/数位板资料仍用于设备识别，其记录数不代表已接入的安装包数量。
+
+## 0.3.0 整机型号目录
+
+`oem-packages.tsv` 每行 11 列，依次为唯一 key、厂商（lenovo/dell）、型号名称、以分号分隔的机型代码/System ID、系统家族（win10/win11）、源目录系统版本或 `*`、发布日期、厂商 HTTPS 地址、SHA-256、大小（0 表示未知）、格式（cab/exe-download）。`exe-download` 不自动执行。
+
+可选维护命令 `python scripts/build_oem_catalog.py` 根据 `oem-snapshots` 中的固定 XML 重建目录，完整来源及 GPL-3.0 数据许可见该文件夹说明。

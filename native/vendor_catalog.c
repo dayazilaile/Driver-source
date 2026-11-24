@@ -87,7 +87,7 @@ int vendor_catalog_parse(VendorCatalog *catalog, char *text, char *error, size_t
             if (!strcmp(catalog->packages[i].key, fields[0])) goto invalid;
         VendorPackage *row = &catalog->packages[catalog->count++];
         *row = (VendorPackage){fields[0], fields[1], fields[2], fields[3], fields[4],
-                              fields[5], fields[6], fields[10], bytes, (unsigned)build};
+                              fields[5], fields[6], fields[10], bytes, (unsigned)build, VENDOR_ZIP_INF};
         line = next;
         continue;
 invalid:

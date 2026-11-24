@@ -23,10 +23,11 @@
 #include "driver_backup.h"
 #include "hardware_database.h"
 #include "vendor_catalog.h"
+#include "oem_catalog.h"
 #include "vendor_download.h"
 #include "update_diagnostics.h"
 
-#define APP_VERSION L"0.2.0"
+#define APP_VERSION L"0.3.0"
 #define MAX_UPDATES 2048
 #define EVENT_MESSAGE (WM_APP + 1)
 #define ID_SCAN 101
@@ -132,7 +133,71 @@ static BOOL vendor_seen[VENDOR_MAX_PACKAGES];
 static unsigned windows_build;
 static WCHAR computer_vendor[128], computer_model[128];
 static BOOL native_x64;
-static size_t matched_packages, unmatched_devices;
+static size_t matched_packages;
+
+static OemCatalog oem_catalog;
+static char *oem_catalog_text;
+static VendorPackage selected_oem;
+static int oem_match = -1;
+static WCHAR computer_sku[128];
+static size_t detected_devices;
+
+static HRESULT load_oem_catalog(void) {
+    WCHAR path[MAX_PATH]; char error[256];
+    HRESULT hr = StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\database\\oem-packages.tsv", app_directory);
+    if (FAILED(hr)) return hr;
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > 4194304) {
+        CloseHandle(file); return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    }
+    oem_catalog_text = malloc((size_t)size.QuadPart + 1);
+    if (!oem_catalog_text) { CloseHandle(file); return E_OUTOFMEMORY; }
+    DWORD received;
+    BOOL ok = ReadFile(file, oem_catalog_text, (DWORD)size.QuadPart, &received, NULL);
+    CloseHandle(file);
+    if (!ok || received != (DWORD)size.QuadPart) return HRESULT_FROM_WIN32(ERROR_READ_FAULT);
+    oem_catalog_text[received] = 0;
+    if (memchr(oem_catalog_text, 0, received)) return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    if (!oem_catalog_parse(&oem_catalog, oem_catalog_text, error, sizeof(error))) {
+        WCHAR message[256]; utf8_text(error, message, ARRAYSIZE(message)); append_update_log(app_directory, message);
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    }
+    return S_OK;
+}
+
+static void match_oem_package(void) {
+    char vendor[512], product[512], sku[512];
+    oem_match = -1;
+    if (!WideCharToMultiByte(CP_UTF8, 0, computer_vendor, -1, vendor, sizeof(vendor), NULL, NULL) ||
+        !WideCharToMultiByte(CP_UTF8, 0, computer_model, -1, product, sizeof(product), NULL, NULL) ||
+        !WideCharToMultiByte(CP_UTF8, 0, computer_sku, -1, sku, sizeof(sku), NULL, NULL)) return;
+    oem_match = oem_catalog_select(&oem_catalog, vendor, product, sku, windows_build, native_x64);
+    if (oem_match < 0) return;
+    const OemPackage *pack = &oem_catalog.packages[oem_match];
+    oem_package_as_vendor(pack, &selected_oem);
+    Candidate *row = calloc(1, sizeof(*row));
+    if (!row) { oem_match = -1; return; }
+    WCHAR model[256], release[24], family[24], amount[64];
+    utf8_text(pack->model, model, ARRAYSIZE(model));
+    utf8_text(pack->release, release, ARRAYSIZE(release));
+    utf8_text(pack->os, family, ARRAYSIZE(family));
+    if (pack->bytes) StringCchPrintfW(amount, ARRAYSIZE(amount), L"%.2f GiB", (double)pack->bytes / 1073741824.0);
+    else StringCchCopyW(amount, ARRAYSIZE(amount), L"大小由下载服务器提供");
+    StringCchPrintfW(row->title, ARRAYSIZE(row->title), L"%s 整机驱动包 · %s %s · %s · %s", model,
+        family, release, amount, pack->format == VENDOR_EXE_DOWNLOAD ? L"仅下载，需手动安装" : L"支持 INF 匹配安装");
+    StringCchCopyW(row->provider, ARRAYSIZE(row->provider), !strcmp(pack->manufacturer, "lenovo") ? L"联想官方" : L"戴尔官方");
+    StringCchPrintfW(row->hardware, ARRAYSIZE(row->hardware), L"整机型号匹配：%s / SKU %s", computer_model, computer_sku);
+    row->index = VENDOR_MAX_PACKAGES;
+    emit(EV_UPDATE, row->index, NULL, row);
+}
+
+static const VendorPackage *selected_package(int index) {
+    if (index == VENDOR_MAX_PACKAGES && oem_match >= 0) return &selected_oem;
+    if (index >= 0 && (size_t)index < vendor_catalog.count) return &vendor_catalog.packages[index];
+    return NULL;
+}
 
 static HRESULT load_vendor_catalog(void) {
     WCHAR path[MAX_PATH];
@@ -166,6 +231,8 @@ static void detect_platform(void) {
     RegGetValueW(HKEY_LOCAL_MACHINE, bios, L"SystemManufacturer", RRF_RT_REG_SZ, NULL, computer_vendor, &chars);
     chars = sizeof(computer_model);
     RegGetValueW(HKEY_LOCAL_MACHINE, bios, L"SystemProductName", RRF_RT_REG_SZ, NULL, computer_model, &chars);
+    chars = sizeof(computer_sku);
+    RegGetValueW(HKEY_LOCAL_MACHINE, bios, L"SystemSKU", RRF_RT_REG_SZ, NULL, computer_sku, &chars);
     SYSTEM_INFO system;
     GetNativeSystemInfo(&system);
     native_x64 = system.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64;
@@ -205,9 +272,8 @@ static void match_vendor_device(HDEVINFO set, SP_DEVINFO_DATA *device, Hardware 
             }
         }
     }
-    if (!matched) ++unmatched_devices;
     StringCchCopyW(hardware->package_status, ARRAYSIZE(hardware->package_status),
-        matched ? L"已匹配厂商安装包" : L"厂商包尚未收录，可查看来源建议");
+        matched ? L"已匹配单设备安装包" : oem_match >= 0 ? L"已提供整机包，设备内容需解压核对" : L"当前目录暂无适用包；可查看来源建议");
 }
 
 static void publish_diagnostics(HRESULT error, const WCHAR *step) {
@@ -216,12 +282,12 @@ static void publish_diagnostics(HRESULT error, const WCHAR *step) {
     StringCchPrintfW(text, 8192,
         L"驱动源 " APP_VERSION L" · 厂商独立下载模式\r\n"
         L"整机厂商 = %s\r\n整机型号 = %s\r\n进程令牌 = %s\r\nWindows 内部版本 = %u\r\n本机架构符合 x64 安装包 = %s\r\n"
-        L"厂商安装包目录 = %zu 项\r\n最近步骤 = %s\r\n最近结果 = 0x%08lX\r\n\r\n"
+        L"单设备安装包目录 = %zu 项\r\n整机型号/系统目录 = %zu 条\r\n整机 SKU = %s\r\n整机包匹配 = %s\r\n最近步骤 = %s\r\n最近结果 = 0x%08lX\r\n\r\n"
         L"检测使用本机设备硬件 ID；下载使用 HTTPS 厂商发布地址。\r\n"
         L"下载完成核对文件大小和 SHA-256，安装由 Windows 检查签名及设备匹配。\r\n"
         L"未收录的硬件不会出现在自动下载列表，可从“本机硬件”查看来源建议。\r\n",
         computer_vendor, computer_model, update_process_elevated() ? L"已提权" : L"未提权", windows_build,
-        native_x64 ? L"是" : L"否", vendor_catalog.count, step, (unsigned long)error);
+        native_x64 ? L"是" : L"否", vendor_catalog.count, oem_catalog.count, computer_sku, oem_match >= 0 ? L"已匹配" : L"未匹配", step, (unsigned long)error);
     HRESULT log = append_update_log(app_directory, text);
     StringCchCatW(text, 8192, SUCCEEDED(log) ? L"\r\n日志位于软件目录 logs\\DriverSource.log" : L"\r\n日志写入失败，可复制当前诊断文本。");
     emit(EV_DIAGNOSTICS, 0, NULL, text);
@@ -292,6 +358,7 @@ static void scan_hardware(const HardwareDatabase *database) {
         WCHAR device_log[3400];
         StringCchPrintfW(device_log, ARRAYSIZE(device_log), L"硬件 %s | %s | 驱动版本 %s | %s", row->name, row->hardware, row->version, row->package_status);
         append_update_log(app_directory, device_log);
+        ++detected_devices;
         if (row->name[0]) emit(EV_HARDWARE, 0, NULL, row);
         else free(row);
     }
@@ -324,16 +391,22 @@ static void vendor_transfer(int percent, const WCHAR *text) {
 
 static HRESULT download_selected(const Task *task) {
     HRESULT outcome = S_OK;
-    int successful = 0, failed = 0;
+    int successful = 0, submitted_count = 0, failed = 0;
+    BOOL needs_install = FALSE;
+    for (int i = 0; i < task->count; ++i) {
+        const VendorPackage *package = selected_package(task->indices[i]);
+        if (package && package->format != VENDOR_EXE_DOWNLOAD) needs_install = TRUE;
+    }
     BOOL reboot = FALSE;
-    if (task->install && task->pre_backup) {
+    if (task->install && needs_install && task->pre_backup) {
         HRESULT checkpoint = create_backup(task);
         if (FAILED(checkpoint) || should_cancel()) return FAILED(checkpoint) ? checkpoint : HRESULT_FROM_WIN32(ERROR_CANCELLED);
     }
     for (int item = 0; item < task->count && !should_cancel() && !reboot; ++item) {
         int index = task->indices[item];
-        if (index < 0 || (size_t)index >= vendor_catalog.count) { ++failed; outcome = E_INVALIDARG; continue; }
-        const VendorPackage *package = &vendor_catalog.packages[index];
+        const VendorPackage *package = selected_package(index);
+        if (!package) { ++failed; outcome = E_INVALIDARG; continue; }
+        BOOL install = task->install && package->format != VENDOR_EXE_DOWNLOAD;
         WCHAR text[1024], saved[MAX_PATH] = L"", inf[MAX_PATH];
         StringCchPrintfW(text, ARRAYSIZE(text), L"正在处理厂商驱动 %d / %d。", item + 1, task->count);
         emit(EV_STATUS, 0, text, NULL);
@@ -342,7 +415,7 @@ static HRESULT download_selected(const Task *task) {
             vendor_transfer, saved, ARRAYSIZE(saved));
         log_update_result(L"厂商直连下载与 SHA-256 校验", hr);
         BOOL submitted = FALSE;
-        if (SUCCEEDED(hr) && task->install && !should_cancel()) {
+        if (SUCCEEDED(hr) && install && !should_cancel()) {
             emit(EV_ITEM_STATUS, index, L"正在解压已校验驱动包", NULL);
             hr = vendor_extract_package(package, saved, should_cancel, inf, ARRAYSIZE(inf));
             log_update_result(L"已校验厂商包解压", hr);
@@ -355,13 +428,15 @@ static HRESULT download_selected(const Task *task) {
             }
         }
         if (SUCCEEDED(hr) && should_cancel() && !submitted) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
-        if (SUCCEEDED(hr) && task->install && !submitted) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+        if (SUCCEEDED(hr) && install && !submitted) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
         log_update_result(L"厂商驱动处理结果", hr);
         if (saved[0]) append_update_log(app_directory, saved);
         if (SUCCEEDED(hr)) {
             ++successful;
-            emit(task->install ? EV_SUBMITTED : EV_ITEM_STATUS, index,
-                 task->install ? reboot ? L"已提交匹配安装，需要重启" : L"已提交系统匹配安装" : L"已保存并校验", NULL);
+            if (submitted) ++submitted_count;
+            emit(submitted ? EV_SUBMITTED : EV_ITEM_STATUS, index,
+                submitted ? reboot ? L"已提交匹配安装，需要重启" : L"已提交系统匹配安装" :
+                package->format == VENDOR_EXE_DOWNLOAD ? L"已下载并校验，需手动安装" : L"已保存并校验", NULL);
         } else {
             ++failed;
             outcome = hr;
@@ -371,11 +446,10 @@ static HRESULT download_selected(const Task *task) {
         }
     }
     WCHAR text[1024];
-    StringCchPrintfW(text, ARRAYSIZE(text), L"%s %s %d 项，失败或取消 %d 项，未执行 %d 项。%s",
-        should_cancel() ? L"任务已取消。" : L"任务结束。", task->install ? L"已提交系统匹配安装" : L"已保存",
-        successful, failed, task->count - successful - failed,
-        reboot ? L"系统要求重启，请保存工作后手动重启。" :
-        task->install ? L"Windows 按驱动排名决定是否替换现有版本，详情见下载目录 install.log。" : L"驱动包保存在所选下载目录。");
+    StringCchPrintfW(text, ARRAYSIZE(text), L"%s下载校验完成 %d 项，已提交匹配安装 %d 项，失败或取消 %d 项，未执行 %d 项。%s",
+        should_cancel() ? L"任务已取消。" : L"任务结束。", successful, submitted_count, failed,
+        task->count - successful - failed, reboot ? L"系统要求重启，请保存工作后手动重启。" :
+        L"整机 EXE 包仅保存，不自动运行；安装详情见下载目录日志。");
     emit(EV_STATUS, 0, text, NULL);
     if (should_cancel() && SUCCEEDED(outcome)) outcome = HRESULT_FROM_WIN32(ERROR_CANCELLED);
     return outcome;
@@ -438,7 +512,8 @@ static DWORD WINAPI worker_main(void *unused) {
     HRESULT init = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     detect_platform();
     HRESULT catalog_hr = load_vendor_catalog();
-    HRESULT last_error = catalog_hr;
+    HRESULT oem_hr = load_oem_catalog();
+    HRESULT last_error = FAILED(catalog_hr) ? catalog_hr : oem_hr;
     const WCHAR *last_step = L"加载厂商安装包目录";
     publish_diagnostics(last_error, last_step);
     for (;;) {
@@ -451,17 +526,19 @@ static DWORD WINAPI worker_main(void *unused) {
         if (task.command == ID_SCAN) {
             emit(EV_RESET, 0, NULL, NULL);
             ZeroMemory(vendor_seen, sizeof(vendor_seen));
-            matched_packages = 0; unmatched_devices = 0;
+            matched_packages = 0; detected_devices = 0;
+            match_oem_package();
             scan_hardware(&database);
-            last_error = catalog_hr; last_step = L"本机硬件与厂商驱动包匹配";
-            if (FAILED(catalog_hr)) report_error(L"加载厂商安装包目录", catalog_hr);
-            else {
+            last_error = FAILED(catalog_hr) ? catalog_hr : oem_hr; last_step = L"本机硬件与厂商驱动包匹配";
+            if (FAILED(catalog_hr)) report_error(L"加载单设备安装包目录", catalog_hr);
+            if (FAILED(oem_hr)) report_error(L"加载整机驱动包目录", oem_hr);
+            if (SUCCEEDED(catalog_hr) || SUCCEEDED(oem_hr)) {
                 WCHAR message[1024];
                 if (!native_x64 || windows_build < 17763)
                     StringCchCopyW(message, ARRAYSIZE(message), L"当前安装包目录支持 Windows 10 1809 及以上 x64 系统。其他系统仍可查看硬件与来源建议。");
                 else StringCchPrintfW(message, ARRAYSIZE(message),
-                    L"%s匹配 %zu 个厂商驱动包，%zu 个设备尚无适用包记录。可在“本机硬件”查看来源建议。",
-                    should_cancel() ? L"扫描已取消。" : L"检测完成。", matched_packages, unmatched_devices);
+                    L"%s已检测 %zu 个设备，匹配 %zu 个单设备包、%d 个整机包。目录记录不代表缺失驱动，正常设备也可能无需额外安装。",
+                    should_cancel() ? L"扫描已取消。" : L"检测完成。", detected_devices, matched_packages, oem_match >= 0 ? 1 : 0);
                 emit(EV_STATUS, 0, message, NULL);
             }
             publish_diagnostics(last_error, last_step);
@@ -493,7 +570,7 @@ static DWORD WINAPI worker_main(void *unused) {
             }
         } else if (task.command == ID_CHECK_SOURCES) {
             check_sources(&task);
-        } else if (task.command == ID_DOWNLOAD && SUCCEEDED(catalog_hr)) {
+        } else if (task.command == ID_DOWNLOAD && (SUCCEEDED(catalog_hr) || SUCCEEDED(oem_hr))) {
             last_error = download_selected(&task);
             last_step = L"厂商下载与匹配安装";
             publish_diagnostics(last_error, last_step);
@@ -502,6 +579,7 @@ static DWORD WINAPI worker_main(void *unused) {
     }
     free(vendor_catalog_text);
     vendor_catalog_text = NULL;
+    free(oem_catalog_text); oem_catalog_text = NULL;
     hardware_database_close(&database);
     if (SUCCEEDED(init)) CoUninitialize();
     emit(EV_EXIT, 0, NULL, NULL);
@@ -736,8 +814,6 @@ static void select_device_sources(void) {
         int provider = source_index(row->identity.match.sources[index]);
         if (provider >= 0) source_filter[provider] = TRUE;
     }
-    int catalog = source_index("microsoft-catalog");
-    if (catalog >= 0) source_filter[catalog] = TRUE;
     filtering_sources = TRUE;
     WCHAR text[1024];
     StringCchPrintfW(text, ARRAYSIZE(text), L"设备来源建议 · %s · %s", row->name, row->identity.basis);
@@ -1156,6 +1232,10 @@ static int window_smoke_test(void) {
     free(vendor_catalog_text); vendor_catalog_text = NULL;
     ZeroMemory(&vendor_catalog, sizeof(vendor_catalog));
     if (!packages_loaded) return 13;
+    HRESULT oem_hr = load_oem_catalog();
+    BOOL oem_loaded = SUCCEEDED(oem_hr) && oem_catalog.count > 3000;
+    free(oem_catalog_text); oem_catalog_text = NULL; ZeroMemory(&oem_catalog, sizeof(oem_catalog));
+    if (!oem_loaded) return 15;
     if (SendMessageW(source_box, CB_GETCOUNT, 0, 0) != 1) return 14;
     return ListView_GetItemCount(source_list) == (int)ARRAYSIZE(driver_sources) ? 0 : 12;
 }

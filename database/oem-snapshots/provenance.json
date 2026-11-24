@@ -1,0 +1,17 @@
+{
+  "upstream_repository": "https://github.com/OSDeploy/OSD",
+  "upstream_commit": "1bf395f2b673b2874992716a776c0be4a8c98c6e",
+  "license": "GPL-3.0, data files and generated index; see LICENSE-OSD-GPL-3.0.txt",
+  "snapshot_files": {
+    "lenovo.xml": "ea02094f64d51e4a6fc3fc5077a39a17bc3023837e6dc72a281d1f4c7024fdc4",
+    "dell.xml": "9bf2c9444e1102e40bf8d56d854aca291ebebcbdde2686f703ce128d08b4eff9"
+  },
+  "original_catalogs": [
+    "https://download.lenovo.com/cdrt/td/catalogv2.xml",
+    "https://downloads.dell.com/catalog/DriverPackCatalog.cab"
+  ],
+  "entries": 3777,
+  "lenovo_models": 500,
+  "dell_models": 428,
+  "payload_validation": "Catalog metadata and SHA-256 are indexed. Vendor payload URLs are blocked by the development cloud egress policy. Downloads must pass pinned SHA-256 on the user computer. EXE packs support download only."
+}

@@ -3,12 +3,14 @@
 #include <stddef.h>
 #include <stdint.h>
 #define VENDOR_MAX_PACKAGES 1024
+typedef enum { VENDOR_ZIP_INF, VENDOR_CAB_PACK, VENDOR_EXE_DOWNLOAD } VendorFormat;
 /* Strings refer to the mutable UTF-8 buffer supplied to vendor_catalog_parse. */
 typedef struct {
     const char *key, *title, *provider, *version, *hardware_ids;
     const char *url, *sha256, *inf;
     uint64_t bytes;
     unsigned min_build;
+    VendorFormat format;
 } VendorPackage;
 typedef struct {
     VendorPackage packages[VENDOR_MAX_PACKAGES];

@@ -48,6 +48,8 @@ int main(int argc, char **argv) {
     fixture.bytes = 5;
     fixture.sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
     check(vendor_verify_file(path, &fixture), "SHA-256 known vector");
+    fixture.bytes = 0;
+    check(vendor_verify_file(path, &fixture), "SHA-256 with catalog size unknown");
     fixture.bytes = 6;
     assert(vendor_verify_file(path, &fixture) == HRESULT_FROM_WIN32(ERROR_CRC));
     fixture.bytes = 5; fixture.sha256 = "0000000000000000000000000000000000000000000000000000000000000000";

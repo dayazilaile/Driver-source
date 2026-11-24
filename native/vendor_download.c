@@ -12,6 +12,7 @@
 #include <strsafe.h>
 #include <objbase.h>
 #include <stdlib.h>
+#include <wchar.h>
 
 static HRESULT status_error(NTSTATUS status) {
     return status < 0 ? E_FAIL : S_OK;
@@ -32,7 +33,7 @@ HRESULT vendor_verify_file(const WCHAR *path, const VendorPackage *package) {
                        FILE_FLAG_SEQUENTIAL_SCAN, NULL);
     if (file == INVALID_HANDLE_VALUE) { hr = HRESULT_FROM_WIN32(GetLastError()); goto done; }
     if (!GetFileSizeEx(file, &size)) { hr = HRESULT_FROM_WIN32(GetLastError()); goto done; }
-    if ((uint64_t)size.QuadPart != package->bytes) { hr = HRESULT_FROM_WIN32(ERROR_CRC); goto done; }
+    if (size.QuadPart <= 0 || (package->bytes && (uint64_t)size.QuadPart != package->bytes)) { hr = HRESULT_FROM_WIN32(ERROR_CRC); goto done; }
     for (;;) {
         DWORD count;
         if (!ReadFile(file, buffer, sizeof(buffer), &count, NULL)) {
@@ -66,8 +67,11 @@ HRESULT vendor_download_package(const VendorPackage *package, const WCHAR *root,
     WCHAR guid[40], folder[MAX_PATH] = L"", partial[MAX_PATH] = L"", final[MAX_PATH];
     GUID id;
     BYTE buffer[65536];
-    uint64_t received = 0;
+    uint64_t received = 0, total = package->bytes;
+    const WCHAR *filename = package->format == VENDOR_ZIP_INF ? L"package.zip" :
+        package->format == VENDOR_CAB_PACK ? L"package.cab" : L"package.exe";
     TransferSample sample = {0};
+    ULONGLONG last_progress = 0;
     saved[0] = 0;
     HRESULT hr = E_INVALIDARG;
     if (PathIsRelativeW(root) || wcslen(root) > 150) return hr;
@@ -82,7 +86,7 @@ HRESULT vendor_download_package(const VendorPackage *package, const WCHAR *root,
     hr = StringCchPrintfW(target, ARRAYSIZE(target), L"%s%s", path, extra);
     if (FAILED(hr)) return hr;
     if (cancelled()) return HRESULT_FROM_WIN32(ERROR_CANCELLED);
-    session = WinHttpOpen(L"DriverSource Vendor/0.2.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    session = WinHttpOpen(L"DriverSource Vendor/0.3.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                          WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) goto winerror;
     WinHttpSetTimeouts(session, 10000, 10000, 20000, 20000);
@@ -105,14 +109,22 @@ HRESULT vendor_download_package(const VendorPackage *package, const WCHAR *root,
         progress(0, text);
         hr = HRESULT_FROM_WIN32(ERROR_BAD_NET_RESP); goto done;
     }
+    if (!total) {
+        WCHAR length[64]; DWORD length_bytes = sizeof(length);
+        if (WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX,
+            length, &length_bytes, WINHTTP_NO_HEADER_INDEX)) {
+            WCHAR *end; unsigned long long number = wcstoull(length, &end, 10);
+            if (!*end && number <= UINT64_C(17179869184)) total = (uint64_t)number;
+        }
+    }
     hr = CoCreateGuid(&id);
     if (FAILED(hr)) goto done;
     StringFromGUID2(&id, guid, ARRAYSIZE(guid));
     hr = StringCchPrintfW(folder, ARRAYSIZE(folder), L"%s\\Vendor-%s", root, guid);
     if (FAILED(hr)) goto done;
     if (!CreateDirectoryW(folder, NULL)) goto winerror;
-    hr = StringCchPrintfW(partial, ARRAYSIZE(partial), L"%s\\package.zip.part", folder);
-    if (SUCCEEDED(hr)) hr = StringCchPrintfW(final, ARRAYSIZE(final), L"%s\\package.zip", folder);
+    hr = StringCchPrintfW(partial, ARRAYSIZE(partial), L"%s\\%s.part", folder, filename);
+    if (SUCCEEDED(hr)) hr = StringCchPrintfW(final, ARRAYSIZE(final), L"%s\\%s", folder, filename);
     if (FAILED(hr)) goto done;
     file = CreateFileW(partial, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) goto winerror;
@@ -121,18 +133,24 @@ HRESULT vendor_download_package(const VendorPackage *package, const WCHAR *root,
         DWORD count, written;
         if (!WinHttpReadData(request, buffer, sizeof(buffer), &count)) goto winerror;
         if (!count) break;
-        if (received + count > package->bytes) { hr = HRESULT_FROM_WIN32(ERROR_CRC); goto done; }
+        if (received + count > (package->bytes ? package->bytes : UINT64_C(17179869184))) { hr = HRESULT_FROM_WIN32(ERROR_CRC); goto done; }
         if (!WriteFile(file, buffer, count, &written, NULL)) goto winerror;
         if (written != count) { hr = HRESULT_FROM_WIN32(ERROR_WRITE_FAULT); goto done; }
         received += count;
-        double speed = transfer_sample(&sample, GetTickCount64(), (double)received);
+        ULONGLONG now = GetTickCount64();
+        double speed = transfer_sample(&sample, now, (double)received);
+        if (now - last_progress < 100 && (!total || received < total)) continue;
+        last_progress = now;
         WCHAR text[256];
-        if (sample.measured)
-            StringCchPrintfW(text, ARRAYSIZE(text), L"下载 %.1f / %.1f KiB · 速度 %.1f KiB/s",
-                (double)received / 1024.0, (double)package->bytes / 1024.0, speed / 1024.0);
-        else StringCchPrintfW(text, ARRAYSIZE(text), L"下载 %.1f / %.1f KiB · 正在统计速度",
-                (double)received / 1024.0, (double)package->bytes / 1024.0);
-        progress((int)(received * 100 / package->bytes), text);
+        WCHAR amount[128], rate[96];
+        if (total) StringCchPrintfW(amount, ARRAYSIZE(amount), L"%.1f / %.1f MiB", (double)received / 1048576.0, (double)total / 1048576.0);
+        else StringCchPrintfW(amount, ARRAYSIZE(amount), L"已下载 %.1f MiB", (double)received / 1048576.0);
+        if (sample.measured) StringCchPrintfW(rate, ARRAYSIZE(rate), L"%.1f KiB/s", speed / 1024.0);
+        else StringCchCopyW(rate, ARRAYSIZE(rate), L"正在统计速度");
+        StringCchPrintfW(text, ARRAYSIZE(text), L"%s · %s", amount, rate);
+        int percent = total ? (int)(received * 100 / total) : -1;
+        if (percent > 100) percent = 100;
+        progress(percent, text);
     }
     if (cancelled()) { hr = HRESULT_FROM_WIN32(ERROR_CANCELLED); goto done; }
     if (!FlushFileBuffers(file)) goto winerror;
@@ -199,11 +217,33 @@ static HRESULT run_tool(const WCHAR *name, const WCHAR *args, const WCHAR *log_p
     return hr;
 }
 
+static BOOL contains_inf(const WCHAR *directory, unsigned depth) {
+    if (depth > 32) return FALSE;
+    WCHAR pattern[MAX_PATH], path[MAX_PATH]; WIN32_FIND_DATAW entry;
+    if (FAILED(StringCchPrintfW(pattern, ARRAYSIZE(pattern), L"%s\\*", directory))) return FALSE;
+    HANDLE find = FindFirstFileW(pattern, &entry);
+    if (find == INVALID_HANDLE_VALUE) return FALSE;
+    BOOL found = FALSE;
+    do {
+        if (!wcscmp(entry.cFileName, L".") || !wcscmp(entry.cFileName, L"..") ||
+            (entry.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+        if (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (SUCCEEDED(StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\%s", directory, entry.cFileName)))
+                found = contains_inf(path, depth + 1);
+        } else {
+            const WCHAR *extension = PathFindExtensionW(entry.cFileName);
+            found = !_wcsicmp(extension, L".inf");
+        }
+    } while (!found && FindNextFileW(find, &entry));
+    FindClose(find); return found;
+}
+
 HRESULT vendor_extract_package(const VendorPackage *package, const WCHAR *saved,
     VendorCancelled cancelled, WCHAR *inf, size_t chars) {
     WCHAR archive[MAX_PATH], directory[MAX_PATH], log[MAX_PATH], arguments[1024], member[96];
-    if (!vendor_safe_member(package->inf)) return E_INVALIDARG;
-    HRESULT hr = StringCchPrintfW(archive, ARRAYSIZE(archive), L"%s\\package.zip", saved);
+    if (package->format == VENDOR_EXE_DOWNLOAD) return E_NOTIMPL;
+    if (package->format == VENDOR_ZIP_INF && !vendor_safe_member(package->inf)) return E_INVALIDARG;
+    HRESULT hr = StringCchPrintfW(archive, ARRAYSIZE(archive), L"%s\\%s", saved, package->format == VENDOR_CAB_PACK ? L"package.cab" : L"package.zip");
     if (FAILED(hr)) return hr;
     /* Verify again immediately before extraction, including when used outside the GUI. */
     hr = vendor_verify_file(archive, package);
@@ -213,12 +253,18 @@ HRESULT vendor_extract_package(const VendorPackage *package, const WCHAR *saved,
     if (SUCCEEDED(hr)) hr = StringCchPrintfW(log, ARRAYSIZE(log), L"%s\\extract.log", saved);
     if (FAILED(hr)) return hr;
     if (!CreateDirectoryW(directory, NULL)) return HRESULT_FROM_WIN32(GetLastError());
-    hr = StringCchPrintfW(arguments, ARRAYSIZE(arguments), L"-xf \"%s\" -C \"%s\"", archive, directory);
+    if (package->format == VENDOR_CAB_PACK)
+        hr = StringCchPrintfW(arguments, ARRAYSIZE(arguments), L"-F:* \"%s\" \"%s\"", archive, directory);
+    else hr = StringCchPrintfW(arguments, ARRAYSIZE(arguments), L"-xf \"%s\" -C \"%s\"", archive, directory);
     if (FAILED(hr)) return hr;
     DWORD result = 0;
-    hr = run_tool(L"tar.exe", arguments, log, cancelled, TRUE, &result);
+    hr = run_tool(package->format == VENDOR_CAB_PACK ? L"expand.exe" : L"tar.exe", arguments, log, cancelled, TRUE, &result);
     if (FAILED(hr)) return hr;
     if (result) return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    if (package->format == VENDOR_CAB_PACK) {
+        if (!contains_inf(directory, 0)) return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+        return StringCchPrintfW(inf, chars, L"%s\\*.inf", directory);
+    }
     if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, package->inf, -1, member, ARRAYSIZE(member)))
         return E_INVALIDARG;
     hr = StringCchPrintfW(inf, chars, L"%s\\%s", directory, member);
@@ -232,7 +278,7 @@ HRESULT vendor_extract_package(const VendorPackage *package, const WCHAR *saved,
 HRESULT vendor_install_inf(const WCHAR *inf, const WCHAR *saved, BOOL *reboot) {
     WCHAR arguments[1024], log[MAX_PATH];
     *reboot = FALSE;
-    HRESULT hr = StringCchPrintfW(arguments, ARRAYSIZE(arguments), L"/add-driver \"%s\" /install", inf);
+    HRESULT hr = StringCchPrintfW(arguments, ARRAYSIZE(arguments), L"/add-driver \"%s\" /subdirs /install", inf);
     if (SUCCEEDED(hr)) hr = StringCchPrintfW(log, ARRAYSIZE(log), L"%s\\install.log", saved);
     if (FAILED(hr)) return hr;
     DWORD result = 0;
