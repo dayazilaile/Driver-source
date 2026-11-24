@@ -20,8 +20,10 @@
 #include <wchar.h>
 #include <winhttp.h>
 #include "sources.h"
+#include "driver_backup.h"
+#include "transfer.h"
 
-#define APP_VERSION L"0.1.2"
+#define APP_VERSION L"0.1.3"
 /* IID from the Windows SDK, also usable with MinGW's base wuapi.h. */
 static const GUID driver_update_iid = {0xb383cd1a, 0x5ce9, 0x4504, {0x9f,0x63,0x76,0x4b,0x12,0x36,0xf1,0x91}};
 #define MAX_UPDATES 2048
@@ -37,9 +39,14 @@ static const GUID driver_update_iid = {0xb383cd1a, 0x5ce9, 0x4504, {0x9f,0x63,0x
 #define ID_AUTO_INSTALL 109
 #define ID_CHECK_SOURCES 110
 #define ID_OPEN_SOURCE 111
+#define ID_BACKUP 112
+#define ID_BACKUP_FOLDER 113
+#define ID_OPEN_BACKUP 114
+#define ID_RESTORE 115
+#define ID_PRE_BACKUP 116
 
 typedef enum { EV_STATUS, EV_HARDWARE, EV_UPDATE, EV_RESET, EV_PROGRESS,
-               EV_ITEM_STATUS, EV_INSTALLED, EV_SOURCE_STATUS, EV_DONE, EV_EXIT } EventKind;
+               EV_ITEM_STATUS, EV_INSTALLED, EV_SOURCE_STATUS, EV_TRANSFER, EV_DONE, EV_EXIT } EventKind;
 typedef struct {
     WCHAR name[512], hardware[2048], version[128], state[128];
 } Hardware;
@@ -57,14 +64,17 @@ typedef struct {
 } Event;
 typedef struct {
     int command, source, count, indices[MAX_UPDATES];
-    BOOL install;
-    WCHAR folder[MAX_PATH];
+    BOOL install, pre_backup;
+    WCHAR folder[MAX_PATH], backup_root[MAX_PATH];
 } Task;
 
 static HWND main_window, hardware_list, update_list, status_label, progress_bar;
 static HWND scan_button, download_button, cancel_button, source_box, folder_edit;
 static HWND tab_control, folder_button, open_button, all_button, copy_button;
 static HWND auto_install_box, source_list, check_sources_button, open_source_button;
+static HWND transfer_label, pre_backup_box, backup_description, backup_edit;
+static HWND backup_button, backup_folder_button, open_backup_button, restore_button, restore_description;
+static WCHAR app_directory[MAX_PATH];
 static HFONT ui_font;
 static HANDLE task_event, worker_handle;
 static CRITICAL_SECTION task_lock;
@@ -316,6 +326,40 @@ static HRESULT single_update_collection(IUpdate *update, IUpdateCollection **sel
     return hr;
 }
 
+static void report_transfer(IDownloadProgress *progress, TransferSample *sample) {
+    LONG percent = 0;
+    DECIMAL downloaded_decimal, total_decimal;
+    double downloaded = 0, total = 0;
+    WCHAR text[512], amount[192], speed[128];
+    IDownloadProgress_get_PercentComplete(progress, &percent);
+    emit(EV_PROGRESS, percent, NULL, NULL);
+    HRESULT bytes_hr = IDownloadProgress_get_TotalBytesDownloaded(progress, &downloaded_decimal);
+    if (SUCCEEDED(bytes_hr)) bytes_hr = VarR8FromDec(&downloaded_decimal, &downloaded);
+    if (FAILED(bytes_hr) || downloaded < 0) {
+        sample->initialized = 0;
+        StringCchPrintfW(text, ARRAYSIZE(text), L"下载 %ld%% · 等待更新服务的字节统计", percent);
+        emit(EV_TRANSFER, 0, text, NULL);
+        return;
+    }
+    HRESULT total_hr = IDownloadProgress_get_TotalBytesToDownload(progress, &total_decimal);
+    if (SUCCEEDED(total_hr)) total_hr = VarR8FromDec(&total_decimal, &total);
+    if (SUCCEEDED(total_hr) && total >= 1048576.0)
+        StringCchPrintfW(amount, ARRAYSIZE(amount), L"%.1f / %.1f MiB", downloaded / 1048576.0, total / 1048576.0);
+    else if (SUCCEEDED(total_hr) && total > 0)
+        StringCchPrintfW(amount, ARRAYSIZE(amount), L"%.1f / %.1f KiB", downloaded / 1024.0, total / 1024.0);
+    else StringCchPrintfW(amount, ARRAYSIZE(amount), L"已下载 %.1f KiB", downloaded / 1024.0);
+    double rate = transfer_sample(sample, GetTickCount64(), downloaded);
+    if (!sample->measured) StringCchCopyW(speed, ARRAYSIZE(speed), L"计算中");
+    else if (rate >= 1048576.0) StringCchPrintfW(speed, ARRAYSIZE(speed), L"%.2f MiB/s", rate / 1048576.0);
+    else StringCchPrintfW(speed, ARRAYSIZE(speed), L"%.1f KiB/s", rate / 1024.0);
+    DownloadPhase phase = dphInitializing;
+    IDownloadProgress_get_CurrentUpdateDownloadPhase(progress, &phase);
+    if (phase == dphVerifying)
+        StringCchPrintfW(text, ARRAYSIZE(text), L"下载 %ld%% · %s · 正在校验", percent, amount);
+    else StringCchPrintfW(text, ARRAYSIZE(text), L"下载 %ld%% · %s · 速度（估算）%s", percent, amount, speed);
+    emit(EV_TRANSFER, 0, text, NULL);
+}
+
 static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
     IUpdateCollection *selection = NULL;
     IUpdateDownloader *downloader = NULL;
@@ -325,8 +369,10 @@ static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
     VARIANT_BOOL complete = VARIANT_FALSE, accepted = VARIANT_FALSE, downloaded = VARIANT_FALSE;
     OperationResultCode result_code = orcNotStarted;
     BOOL abort_sent = FALSE;
+    TransferSample sample = {0};
     HRESULT hr;
     VariantInit(&state);
+    emit(EV_TRANSFER, 0, L"正在连接下载服务，等待传输统计…", NULL);
     hr = IUpdate_get_EulaAccepted(update, &accepted);
     if (FAILED(hr)) goto done;
     /* UI obtains explicit consent for each unaccepted license before starting. */
@@ -351,9 +397,7 @@ static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
         if (FAILED(hr)) { IDownloadJob_RequestAbort(job); goto done; }
         IDownloadProgress *progress = NULL;
         if (SUCCEEDED(IDownloadJob_GetProgress(job, &progress))) {
-            LONG percent = 0;
-            if (SUCCEEDED(IDownloadProgress_get_PercentComplete(progress, &percent)))
-                emit(EV_PROGRESS, percent, NULL, NULL);
+            report_transfer(progress, &sample);
             IDownloadProgress_Release(progress);
         }
         if (!complete) Sleep(200);
@@ -375,6 +419,10 @@ static HRESULT download_one(IUpdateSession *session, IUpdate *update) {
     }
     hr = IUpdate_get_IsDownloaded(update, &downloaded);
     if (SUCCEEDED(hr) && !downloaded) hr = E_FAIL;
+    if (SUCCEEDED(hr)) {
+        emit(EV_PROGRESS, 100, NULL, NULL);
+        emit(EV_TRANSFER, 0, L"下载完成 100% · 驱动包已准备就绪", NULL);
+    }
 done:
     if (job) { IDownloadJob_CleanUp(job); IDownloadJob_Release(job); }
     if (result) IDownloadResult_Release(result);
@@ -445,8 +493,12 @@ static HRESULT install_one(IUpdateSession *session, IUpdate *update, BOOL *reboo
         IInstallationProgress *progress = NULL;
         if (SUCCEEDED(IInstallationJob_GetProgress(job, &progress))) {
             LONG percent = 0;
-            if (SUCCEEDED(IInstallationProgress_get_PercentComplete(progress, &percent)))
+            if (SUCCEEDED(IInstallationProgress_get_PercentComplete(progress, &percent))) {
+                WCHAR text[128];
+                StringCchPrintfW(text, ARRAYSIZE(text), L"安装进度 %ld%%", percent);
                 emit(EV_PROGRESS, percent, NULL, NULL);
+                emit(EV_TRANSFER, 0, text, NULL);
+            }
             IInstallationProgress_Release(progress);
         }
         if (!complete) Sleep(200);
@@ -476,9 +528,32 @@ done:
     return hr;
 }
 
+static HRESULT create_backup(const Task *task) {
+    WCHAR saved[MAX_PATH], text[1024];
+    emit(EV_STATUS, 0, L"正在备份现有第三方驱动。取消将在系统导出结束后生效…", NULL);
+    emit(EV_TRANSFER, 0, L"DISM 正在导出驱动，日志保存在备份目录", NULL);
+    emit(EV_PROGRESS, -1, NULL, NULL);
+    HRESULT hr = backup_drivers(task->backup_root, saved, ARRAYSIZE(saved));
+    if (FAILED(hr)) {
+        StringCchPrintfW(text, ARRAYSIZE(text),
+            L"驱动备份失败（0x%08lX）。%s请检查备份路径和 .partial 目录内的日志。",
+            (unsigned long)hr, task->command == ID_BACKUP ? L"" : L"后续安装已暂停。");
+    } else {
+        StringCchPrintfW(text, ARRAYSIZE(text), L"第三方驱动备份完成，保存在 %s。%s",
+            saved, should_cancel() ? L"后续任务已取消。" : L"");
+    }
+    emit(EV_STATUS, 0, text, NULL);
+    emit(EV_PROGRESS, SUCCEEDED(hr) ? 100 : 0, NULL, NULL);
+    return hr;
+}
+
 static void download_selected(IUpdateSession *session, IUpdateCollection *updates, const Task *task) {
-    int successful = 0, failed = 0, export_failed = 0;
+    int successful = 0, failed = 0, save_failed = 0;
     BOOL reboot = FALSE;
+    if (task->install && task->pre_backup) {
+        HRESULT checkpoint = create_backup(task);
+        if (FAILED(checkpoint) || should_cancel()) return;
+    }
     for (int item = 0; item < task->count && !should_cancel() && !reboot; ++item) {
         IUpdate *update = NULL;
         WCHAR text[1024], saved[MAX_PATH];
@@ -488,13 +563,14 @@ static void download_selected(IUpdateSession *session, IUpdateCollection *update
         emit(EV_PROGRESS, 0, NULL, NULL);
         emit(EV_ITEM_STATUS, index, L"下载中", NULL);
         HRESULT hr = IUpdateCollection_get_Item(updates, index, &update);
-        HRESULT backup = S_OK;
+        HRESULT save_result = S_OK;
         if (SUCCEEDED(hr)) hr = download_one(session, update);
         if (SUCCEEDED(hr)) {
             emit(EV_ITEM_STATUS, index, L"正在保存", NULL);
-            backup = export_update(update, task->folder, saved, ARRAYSIZE(saved));
-            if (FAILED(backup)) ++export_failed;
-            if (!task->install) hr = backup;
+            emit(EV_TRANSFER, 0, L"正在保存下载的驱动包…", NULL);
+            save_result = export_update(update, task->folder, saved, ARRAYSIZE(saved));
+            if (FAILED(save_result)) ++save_failed;
+            if (!task->install) hr = save_result;
         }
         if (SUCCEEDED(hr) && task->install) {
             if (should_cancel()) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
@@ -509,7 +585,7 @@ static void download_selected(IUpdateSession *session, IUpdateCollection *update
             ++successful;
             const WCHAR *outcome = task->install ?
                 reboot ? L"已安装，需要重启" :
-                FAILED(backup) ? L"已安装，备份失败" : L"已安装" : L"已保存";
+                FAILED(save_result) ? L"已安装，下载包保存失败" : L"已安装" : L"已保存";
             emit(task->install ? EV_INSTALLED : EV_ITEM_STATUS, index, outcome, NULL);
         } else {
             ++failed;
@@ -520,12 +596,13 @@ static void download_selected(IUpdateSession *session, IUpdateCollection *update
     }
     WCHAR text[1024];
     StringCchPrintfW(text, ARRAYSIZE(text),
-        L"%s %s %d 项，失败或取消 %d 项，未执行 %d 项，备份失败 %d 项。%s",
+        L"%s %s %d 项，失败或取消 %d 项，未执行 %d 项，下载包保存失败 %d 项。%s",
         should_cancel() ? L"任务已取消。" : L"任务结束。",
         task->install ? L"已安装" : L"已保存", successful, failed,
-        task->count - successful - failed, export_failed,
+        task->count - successful - failed, save_failed,
         reboot ? L"Windows 要求重启，请保存工作后手动重启，再重新扫描。" : L"可在列表查看每项结果。");
     emit(EV_STATUS, 0, text, NULL);
+    emit(EV_TRANSFER, 0, L"传输任务已结束", NULL);
 }
 
 static void check_sources(void) {
@@ -609,6 +686,29 @@ static DWORD WINAPI worker_main(void *unused) {
                     else report_error(L"在线匹配驱动", hr);
                 }
             }
+        } else if (task.command == ID_BACKUP) {
+            create_backup(&task);
+        } else if (task.command == ID_RESTORE) {
+            HRESULT hr = S_OK;
+            DWORD code = 0;
+            if (task.pre_backup) hr = create_backup(&task);
+            if (SUCCEEDED(hr) && !should_cancel()) {
+                emit(EV_STATUS, 0, L"正在导入备份驱动，请等待 Windows 完成处理…", NULL);
+                emit(EV_TRANSFER, 0, L"PnPUtil 正在处理备份，取消将在系统操作结束后生效", NULL);
+                emit(EV_PROGRESS, -1, NULL, NULL);
+                hr = restore_drivers(task.folder, task.backup_root, &code);
+                WCHAR text[1024];
+                if (FAILED(hr))
+                    StringCchPrintfW(text, ARRAYSIZE(text), L"备份导入失败（0x%08lX）。请选择完整备份，详见备份目录的 Restore 日志。",
+                                    (unsigned long)hr);
+                else StringCchPrintfW(text, ARRAYSIZE(text),
+                    L"备份导入已完成，Windows 已尝试安装匹配项。%s如需版本降级，请在设备管理器回退驱动。",
+                    code == ERROR_SUCCESS_REBOOT_REQUIRED || code == ERROR_SUCCESS_REBOOT_INITIATED ?
+                    L"系统要求重启，请保存工作后手动重启。" : L"");
+                emit(EV_STATUS, 0, text, NULL);
+                emit(EV_TRANSFER, 0, L"备份导入操作已结束，具体结果见系统工具日志", NULL);
+                emit(EV_PROGRESS, SUCCEEDED(hr) ? 100 : 0, NULL, NULL);
+            }
         } else if (task.command == ID_CHECK_SOURCES) {
             check_sources();
         } else if (task.command == ID_DOWNLOAD && updates && session) {
@@ -642,8 +742,25 @@ static void set_busy(BOOL value) {
     EnableWindow(all_button, !value);
     EnableWindow(auto_install_box, !value);
     EnableWindow(check_sources_button, !value);
+    EnableWindow(pre_backup_box, !value);
+    EnableWindow(backup_button, !value);
+    EnableWindow(restore_button, !value);
+    EnableWindow(backup_edit, !value);
+    EnableWindow(backup_folder_button, !value);
     EnableWindow(cancel_button, value);
     if (!value) SendMessageW(progress_bar, PBM_SETMARQUEE, FALSE, 0);
+}
+
+static void set_progress(int percent) {
+    LONG_PTR style = GetWindowLongPtrW(progress_bar, GWL_STYLE);
+    if (percent < 0) {
+        SetWindowLongPtrW(progress_bar, GWL_STYLE, style | PBS_MARQUEE);
+        SendMessageW(progress_bar, PBM_SETMARQUEE, TRUE, 40);
+    } else {
+        SendMessageW(progress_bar, PBM_SETMARQUEE, FALSE, 0);
+        SetWindowLongPtrW(progress_bar, GWL_STYLE, style & ~((LONG_PTR)PBS_MARQUEE));
+        SendMessageW(progress_bar, PBM_SETPOS, percent, 0);
+    }
 }
 
 static void start_task(Task *task) {
@@ -654,7 +771,8 @@ static void start_task(Task *task) {
     set_busy(TRUE);
     if (task->command == ID_SCAN)
         SetWindowTextW(status_label, L"正在读取本机硬件…");
-    SendMessageW(progress_bar, PBM_SETPOS, 0, 0);
+    set_progress(0);
+    SetWindowTextW(transfer_label, L"等待任务进度…");
     SetEvent(task_event);
 }
 
@@ -676,6 +794,13 @@ static void start_download(void) {
     Task task = { .command = ID_DOWNLOAD };
     if (busy) return;
     task.install = SendMessageW(auto_install_box, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    task.pre_backup = SendMessageW(pre_backup_box, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    GetWindowTextW(backup_edit, task.backup_root, ARRAYSIZE(task.backup_root));
+    if (task.install && task.pre_backup &&
+        (!task.backup_root[0] || PathIsRelativeW(task.backup_root) || wcslen(task.backup_root) > 150)) {
+        MessageBoxW(main_window, L"请在“驱动备份”中选择完整且较短的备份目录。", L"备份位置", MB_OK);
+        return;
+    }
     if (task.install && !IsUserAnAdmin()) {
         MessageBoxW(main_window, L"自动安装驱动需要管理员权限，请以管理员身份运行程序。", L"安装权限", MB_OK | MB_ICONINFORMATION);
         return;
@@ -722,17 +847,56 @@ static void start_download(void) {
     start_task(&task);
 }
 
-static void choose_folder(void) {
+static BOOL select_folder(const WCHAR *title, WCHAR *path) {
     BROWSEINFOW info = {0};
     info.hwndOwner = main_window;
-    info.lpszTitle = L"选择驱动包保存文件夹";
+    info.lpszTitle = title;
     info.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    BOOL selected = FALSE;
     PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&info);
     if (item) {
-        WCHAR path[MAX_PATH];
-        if (SHGetPathFromIDListW(item, path)) SetWindowTextW(folder_edit, path);
+        selected = SHGetPathFromIDListW(item, path);
         CoTaskMemFree(item);
     }
+    return selected;
+}
+
+static void choose_folder(HWND edit) {
+    WCHAR path[MAX_PATH];
+    if (select_folder(L"选择保存文件夹", path)) SetWindowTextW(edit, path);
+}
+
+static void open_directory(HWND edit) {
+    WCHAR path[MAX_PATH];
+    GetWindowTextW(edit, path, ARRAYSIZE(path));
+    if (!path[0] || PathIsRelativeW(path)) return;
+    int error = SHCreateDirectoryExW(main_window, path, NULL);
+    if (error == ERROR_SUCCESS || error == ERROR_ALREADY_EXISTS)
+        ShellExecuteW(main_window, L"open", path, NULL, NULL, SW_SHOWNORMAL);
+    else MessageBoxW(main_window, L"无法打开目录，请检查路径和写入权限。", L"文件夹", MB_OK | MB_ICONERROR);
+}
+
+static void start_backup_task(int command) {
+    if (busy) return;
+    Task task = { .command = command };
+    GetWindowTextW(backup_edit, task.backup_root, ARRAYSIZE(task.backup_root));
+    if (!task.backup_root[0] || PathIsRelativeW(task.backup_root) || wcslen(task.backup_root) > 150) {
+        MessageBoxW(main_window, L"请选择完整且较短的备份保存目录（150 字以内）。", L"备份位置", MB_OK);
+        return;
+    }
+    if (command == ID_RESTORE) {
+        if (!select_folder(L"选择要导入的完整备份文件夹（Backup-日期-GUID）", task.folder)) return;
+        WCHAR marker[MAX_PATH];
+        if (FAILED(StringCchPrintfW(marker, ARRAYSIZE(marker), L"%s\\backup-complete.txt", task.folder)) ||
+            GetFileAttributesW(marker) == INVALID_FILE_ATTRIBUTES) {
+            MessageBoxW(main_window, L"所选目录没有完整备份标记，请选择本软件成功导出的 Backup 文件夹。", L"选择备份", MB_OK);
+            return;
+        }
+        task.pre_backup = SendMessageW(pre_backup_box, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        if (MessageBoxW(main_window, L"将从所选备份导入驱动，并由 Windows 为兼容设备安装匹配项。继续？",
+                        L"导入备份驱动", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+    }
+    start_task(&task);
 }
 
 static void copy_hardware_id(void) {
@@ -764,6 +928,11 @@ static void show_tab(void) {
     ShowWindow(check_sources_button, tab == 2 ? SW_SHOW : SW_HIDE);
     ShowWindow(open_source_button, tab == 2 ? SW_SHOW : SW_HIDE);
     ShowWindow(auto_install_box, tab == 0 ? SW_SHOW : SW_HIDE);
+    ShowWindow(pre_backup_box, tab == 0 || tab == 3 ? SW_SHOW : SW_HIDE);
+    HWND backup_controls[] = { backup_description, backup_edit, backup_folder_button,
+        backup_button, open_backup_button, restore_button, restore_description };
+    for (size_t index = 0; index < ARRAYSIZE(backup_controls); ++index)
+        ShowWindow(backup_controls[index], tab == 3 ? SW_SHOW : SW_HIDE);
 }
 
 static void add_column(HWND list, int index, const WCHAR *title, int width) {
@@ -799,6 +968,8 @@ static void create_controls(HWND window) {
     TabCtrl_InsertItem(tab_control, 1, &tab);
     tab.pszText = L"厂商下载来源";
     TabCtrl_InsertItem(tab_control, 2, &tab);
+    tab.pszText = L"驱动备份";
+    TabCtrl_InsertItem(tab_control, 3, &tab);
     update_list = control(window, WC_LISTVIEWW, L"", LVS_REPORT | LVS_SHOWSELALWAYS | WS_TABSTOP | WS_BORDER, 0);
     ListView_SetExtendedListViewStyle(update_list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     add_column(update_list, 0, L"适用驱动及版本", 400);
@@ -834,15 +1005,26 @@ static void create_controls(HWND window) {
     folder_button = control(window, L"BUTTON", L"保存位置…", WS_TABSTOP, ID_FOLDER);
     open_button = control(window, L"BUTTON", L"打开文件夹", WS_TABSTOP, ID_OPEN);
     download_button = control(window, L"BUTTON", L"下载并安装", WS_TABSTOP | BS_DEFPUSHBUTTON, ID_DOWNLOAD);
+    pre_backup_box = control(window, L"BUTTON", L"安装前备份现有驱动", WS_TABSTOP | BS_AUTOCHECKBOX, ID_PRE_BACKUP);
+    SendMessageW(pre_backup_box, BM_SETCHECK, BST_CHECKED, 0);
+    backup_description = control(window, L"STATIC",
+        L"备份当前系统的第三方驱动包，按时间保存独立副本。安装前默认先备份，备份失败会暂停后续安装。", 0, 0);
+    backup_edit = control(window, L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 0);
+    backup_folder_button = control(window, L"BUTTON", L"备份位置…", WS_TABSTOP, ID_BACKUP_FOLDER);
+    backup_button = control(window, L"BUTTON", L"备份当前驱动", WS_TABSTOP, ID_BACKUP);
+    open_backup_button = control(window, L"BUTTON", L"打开备份目录", WS_TABSTOP, ID_OPEN_BACKUP);
+    restore_button = control(window, L"BUTTON", L"导入备份驱动", WS_TABSTOP, ID_RESTORE);
+    restore_description = control(window, L"STATIC",
+        L"备份内容为第三方驱动包。导入使用 Windows 驱动匹配规则，如需降级，可在设备管理器回退驱动。系统自带驱动由 Windows 维护。", 0, 0);
+    transfer_label = control(window, L"STATIC", L"等待传输统计", 0, 0);
     progress_bar = control(window, PROGRESS_CLASSW, L"", PBS_SMOOTH, 0);
     SendMessageW(progress_bar, PBM_SETRANGE32, 0, 100);
     status_label = control(window, L"STATIC", L"正在检测本机硬件…", 0, 0);
-    PWSTR downloads = NULL;
-    WCHAR path[MAX_PATH] = L"";
-    if (SUCCEEDED(SHGetKnownFolderPath(&FOLDERID_Downloads, 0, NULL, &downloads))) {
-        StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\DriverSource", downloads);
-        CoTaskMemFree(downloads);
-        SetWindowTextW(folder_edit, path);
+    WCHAR path[MAX_PATH];
+    DWORD length = GetModuleFileNameW(NULL, app_directory, ARRAYSIZE(app_directory));
+    if (length && length < ARRAYSIZE(app_directory) && PathRemoveFileSpecW(app_directory)) {
+        if (PathCombineW(path, app_directory, L"下载")) SetWindowTextW(folder_edit, path);
+        if (PathCombineW(path, app_directory, L"驱动备份")) SetWindowTextW(backup_edit, path);
     }
     show_tab();
     set_busy(FALSE);
@@ -852,21 +1034,30 @@ static void resize_controls(int width, int height) {
     MoveWindow(scan_button, 16, 16, 155, 32, TRUE);
     MoveWindow(source_box, 185, 18, width - 305, 180, TRUE);
     MoveWindow(cancel_button, width - 104, 16, 88, 32, TRUE);
-    MoveWindow(tab_control, 16, 62, width - 32, height - 244, TRUE);
-    MoveWindow(update_list, 24, 96, width - 48, height - 287, TRUE);
-    MoveWindow(hardware_list, 24, 96, width - 48, height - 287, TRUE);
-    MoveWindow(source_list, 24, 96, width - 48, height - 287, TRUE);
-    MoveWindow(check_sources_button, 16, height - 174, 165, 28, TRUE);
-    MoveWindow(open_source_button, 192, height - 174, 190, 28, TRUE);
-    MoveWindow(auto_install_box, 205, height - 174, 210, 28, TRUE);
-    MoveWindow(all_button, 16, height - 174, 160, 28, TRUE);
-    MoveWindow(copy_button, 16, height - 174, 180, 28, TRUE);
-    MoveWindow(folder_edit, 16, height - 134, width - 398, 28, TRUE);
-    MoveWindow(folder_button, width - 370, height - 134, 100, 28, TRUE);
-    MoveWindow(open_button, width - 258, height - 134, 100, 28, TRUE);
-    MoveWindow(download_button, width - 146, height - 134, 130, 28, TRUE);
-    MoveWindow(progress_bar, 16, height - 94, width - 32, 14, TRUE);
-    MoveWindow(status_label, 16, height - 70, width - 32, 60, TRUE);
+    MoveWindow(tab_control, 16, 62, width - 32, height - 280, TRUE);
+    MoveWindow(update_list, 24, 96, width - 48, height - 323, TRUE);
+    MoveWindow(hardware_list, 24, 96, width - 48, height - 323, TRUE);
+    MoveWindow(source_list, 24, 96, width - 48, height - 323, TRUE);
+    MoveWindow(check_sources_button, 16, height - 210, 165, 28, TRUE);
+    MoveWindow(open_source_button, 192, height - 210, 190, 28, TRUE);
+    MoveWindow(auto_install_box, 205, height - 210, 180, 28, TRUE);
+    MoveWindow(pre_backup_box, 440, height - 210, 240, 28, TRUE);
+    MoveWindow(all_button, 16, height - 210, 160, 28, TRUE);
+    MoveWindow(copy_button, 16, height - 210, 180, 28, TRUE);
+    MoveWindow(backup_description, 36, 112, width - 72, 54, TRUE);
+    MoveWindow(backup_edit, 36, 176, width - 215, 28, TRUE);
+    MoveWindow(backup_folder_button, width - 165, 176, 125, 28, TRUE);
+    MoveWindow(backup_button, 36, 220, 165, 32, TRUE);
+    MoveWindow(open_backup_button, 218, 220, 165, 32, TRUE);
+    MoveWindow(restore_button, 400, 220, 165, 32, TRUE);
+    MoveWindow(restore_description, 36, 270, width - 72, 75, TRUE);
+    MoveWindow(folder_edit, 16, height - 170, width - 398, 28, TRUE);
+    MoveWindow(folder_button, width - 370, height - 170, 100, 28, TRUE);
+    MoveWindow(open_button, width - 258, height - 170, 100, 28, TRUE);
+    MoveWindow(download_button, width - 146, height - 170, 130, 28, TRUE);
+    MoveWindow(transfer_label, 16, height - 130, width - 32, 24, TRUE);
+    MoveWindow(progress_bar, 16, height - 104, width - 32, 14, TRUE);
+    MoveWindow(status_label, 16, height - 80, width - 32, 70, TRUE);
 }
 
 static void process_event(Event *event) {
@@ -896,7 +1087,7 @@ static void process_event(Event *event) {
     } else if (event->kind == EV_STATUS) {
         SetWindowTextW(status_label, event->text);
     } else if (event->kind == EV_PROGRESS) {
-        SendMessageW(progress_bar, PBM_SETPOS, event->index, 0);
+        set_progress(event->index);
     } else if (event->kind == EV_ITEM_STATUS || event->kind == EV_INSTALLED) {
         for (int index = 0; index < candidate_count; ++index) {
             if (candidates[index]->index != event->index) continue;
@@ -906,10 +1097,15 @@ static void process_event(Event *event) {
                 ListView_SetCheckState(update_list, index, FALSE);
             }
         }
+    } else if (event->kind == EV_TRANSFER) {
+        SetWindowTextW(transfer_label, event->text);
     } else if (event->kind == EV_SOURCE_STATUS) {
         ListView_SetItemText(source_list, event->index, 3, event->text);
     } else if (event->kind == EV_DONE) {
-        if (!InterlockedCompareExchange(&quitting, 0, 0)) set_busy(FALSE);
+        if (!InterlockedCompareExchange(&quitting, 0, 0)) {
+            set_busy(FALSE);
+            SetWindowTextW(transfer_label, L"任务已结束，详情见下方结果");
+        }
     } else if (event->kind == EV_EXIT) {
         DestroyWindow(main_window);
     }
@@ -933,7 +1129,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
     if (message == WM_GETMINMAXINFO) {
         MINMAXINFO *limits = (MINMAXINFO *)lp;
         limits->ptMinTrackSize.x = 850;
-        limits->ptMinTrackSize.y = 580;
+        limits->ptMinTrackSize.y = 640;
         return 0;
     }
     if (message == WM_NOTIFY && ((NMHDR *)lp)->hwndFrom == tab_control &&
@@ -979,15 +1175,14 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         case ID_CANCEL:
             InterlockedExchange(&cancelled, 1);
             EnableWindow(cancel_button, FALSE);
-            SetWindowTextW(status_label, L"正在请求 Windows 更新服务取消，请等待当前操作结束…");
+            SetWindowTextW(status_label, L"已请求取消，正在等待当前系统操作结束…");
             break;
-        case ID_FOLDER: if (!busy) choose_folder(); break;
-        case ID_OPEN: {
-            WCHAR path[MAX_PATH];
-            GetWindowTextW(folder_edit, path, ARRAYSIZE(path));
-            if (path[0]) ShellExecuteW(window, L"open", path, NULL, NULL, SW_SHOWNORMAL);
-            break;
-        }
+        case ID_FOLDER: if (!busy) choose_folder(folder_edit); break;
+        case ID_OPEN: open_directory(folder_edit); break;
+        case ID_BACKUP_FOLDER: if (!busy) choose_folder(backup_edit); break;
+        case ID_OPEN_BACKUP: open_directory(backup_edit); break;
+        case ID_BACKUP: start_backup_task(ID_BACKUP); break;
+        case ID_RESTORE: start_backup_task(ID_RESTORE); break;
         case ID_COPY: copy_hardware_id(); break;
         case ID_ALL: {
             BOOL all = TRUE;
@@ -1004,12 +1199,25 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         if (InterlockedExchange(&quitting, 1)) return 0;
         InterlockedExchange(&cancelled, 1);
         EnableWindow(window, FALSE);
-        SetWindowTextW(status_label, L"正在结束更新服务任务，请稍候…");
+        SetWindowTextW(status_label, L"正在等待系统工具或更新服务结束，请稍候…");
         SetEvent(task_event);
         return 0;
     }
     if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }
     return DefWindowProcW(window, message, wp, lp);
+}
+
+static int window_smoke_test(void) {
+    WCHAR expected[MAX_PATH], actual[MAX_PATH];
+    if (!folder_edit || !backup_edit || !transfer_label || !progress_bar || !backup_button ||
+        !restore_button || !pre_backup_box) return 5;
+    if (!PathCombineW(expected, app_directory, L"下载")) return 6;
+    GetWindowTextW(folder_edit, actual, ARRAYSIZE(actual));
+    if (wcscmp(expected, actual)) return 7;
+    if (!PathCombineW(expected, app_directory, L"驱动备份")) return 8;
+    GetWindowTextW(backup_edit, actual, ARRAYSIZE(actual));
+    if (wcscmp(expected, actual)) return 9;
+    return SendMessageW(pre_backup_box, BM_GETCHECK, 0, 0) == BST_CHECKED ? 0 : 10;
 }
 
 static int self_test(void) {
@@ -1067,7 +1275,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command, int s
     if (!window) { CloseHandle(task_event); DeleteCriticalSection(&task_lock); CoUninitialize(); return 1; }
     ShowWindow(window, show);
     UpdateWindow(window);
+    int exit_code = 0;
     if (!wcscmp(command, L"--smoke-test")) {
+        exit_code = window_smoke_test();
         DestroyWindow(window);
     } else {
         worker_handle = CreateThread(NULL, 0, worker_main, NULL, 0, NULL);
@@ -1092,5 +1302,5 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command, int s
     CloseHandle(task_event);
     DeleteCriticalSection(&task_lock);
     CoUninitialize();
-    return 0;
+    return exit_code;
 }

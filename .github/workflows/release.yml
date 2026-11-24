@@ -22,6 +22,9 @@ jobs:
       - name: Compile with MinGW-w64
         shell: msys2 {0}
         run: MSYS2_ARG_CONV_EXCL='*' cmd.exe /c build-windows.bat mingw
+      - name: Check transfer calculations
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_transfer.c -o build/test_transfer.exe && ./build/test_transfer.exe
       - name: Check native executable
         shell: pwsh
         run: |
@@ -49,6 +52,9 @@ jobs:
       - name: Compile C with warnings treated as errors
         shell: cmd
         run: call build-windows.bat msvc
+      - name: Check transfer calculations
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_transfer.c /Fo"build\test_transfer.obj" /Fe"build\test_transfer.exe" && build\test_transfer.exe
       - name: Check hardware API and native window startup
         shell: pwsh
         run: |
