@@ -8,5 +8,6 @@ typedef struct { IUnknown *progress, *completed; } WuaCallbacks;
 
 /* Keep references through the operation result and job cleanup. Callbacks are thread-safe no-ops. */
 HRESULT wua_callbacks_create(WuaOperation operation, WuaCallbacks *callbacks);
+BOOL wua_should_fallback(HRESULT result, BOOL has_job, BOOL cancelled);
 void wua_callbacks_release(WuaCallbacks *callbacks);
 #endif

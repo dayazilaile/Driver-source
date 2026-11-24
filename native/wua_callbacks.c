@@ -90,3 +90,9 @@ HRESULT wua_callbacks_create(WuaOperation operation, WuaCallbacks *callbacks) {
     }
     return S_OK;
 }
+
+BOOL wua_should_fallback(HRESULT result, BOOL has_job, BOOL cancelled) {
+    if (has_job || cancelled) return FALSE;
+    return result == E_POINTER || result == E_ACCESSDENIED || result == RPC_E_ACCESS_DENIED ||
+           result == E_NOTIMPL;
+}

@@ -13,3 +13,4 @@ mingw64/
 cmake-build-*/
 build-vs/
 build-gcc/
+logs/

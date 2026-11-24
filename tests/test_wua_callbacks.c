@@ -48,7 +48,7 @@ static void check_offline_search(void) {
     VARIANT_BOOL complete = VARIANT_FALSE;
     VariantInit(&state);
     check_hr(CoInitializeEx(NULL, COINIT_MULTITHREADED), "CoInitializeEx");
-    HRESULT security = CoInitializeSecurity(NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_DEFAULT,
+    HRESULT security = CoInitializeSecurity(NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
         RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE, NULL);
     assert(SUCCEEDED(security) || security == RPC_E_TOO_LATE);
     check_hr(CoCreateInstance(&CLSID_UpdateSession, NULL, CLSCTX_INPROC_SERVER,
@@ -73,7 +73,10 @@ static void check_offline_search(void) {
     IUpdateSearcher_EndSearch(searcher, job, &result);
     ISearchJob_CleanUp(job);
     ISearchJob_Release(job);
-    if (result) ISearchResult_Release(result);
+    if (result) { ISearchResult_Release(result); result = NULL; }
+    check_hr(IUpdateSearcher_Search(searcher, criteria, &result), "Synchronous offline Search");
+    assert(result);
+    ISearchResult_Release(result);
     wua_callbacks_release(&callbacks);
     IUpdateSearcher_Release(searcher);
     IUpdateSession_Release(session);
@@ -104,6 +107,14 @@ int main(void) {
     WuaCallbacks callbacks = {0};
     assert(wua_callbacks_create((WuaOperation)99, &callbacks) == E_INVALIDARG);
     assert(wua_callbacks_create(WUA_SEARCH, NULL) == E_POINTER);
+    assert(wua_should_fallback(E_ACCESSDENIED, FALSE, FALSE));
+    assert(wua_should_fallback(RPC_E_ACCESS_DENIED, FALSE, FALSE));
+    assert(wua_should_fallback(E_POINTER, FALSE, FALSE));
+    assert(wua_should_fallback(E_NOTIMPL, FALSE, FALSE));
+    assert(!wua_should_fallback(E_ACCESSDENIED, TRUE, FALSE));
+    assert(!wua_should_fallback(E_ACCESSDENIED, FALSE, TRUE));
+    assert(!wua_should_fallback(S_OK, FALSE, FALSE));
+    assert(!wua_should_fallback(E_INVALIDARG, FALSE, FALSE));
     check_offline_search();
     puts("Windows Update callbacks, reference counts and offline BeginSearch passed");
     return 0;

@@ -31,6 +31,9 @@ jobs:
       - name: Check Windows Update callback interfaces
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_wua_callbacks.c native/wua_callbacks.c -o build/test_wua_callbacks.exe -lole32 -loleaut32 -luuid && ./build/test_wua_callbacks.exe
+      - name: Check system diagnostics
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_diagnostics.c native/update_diagnostics.c -o build/test_diagnostics.exe -lshell32 -ladvapi32 -lole32 && ./build/test_diagnostics.exe
       - name: Check native executable
         shell: pwsh
         run: |
@@ -82,6 +85,9 @@ jobs:
       - name: Check Windows Update callback interfaces
         shell: cmd
         run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_wua_callbacks.c native\wua_callbacks.c /Fobuild\ /Fe"build\test_wua_callbacks.exe" /link ole32.lib oleaut32.lib uuid.lib && build\test_wua_callbacks.exe
+      - name: Check system diagnostics
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT tests\test_diagnostics.c native\update_diagnostics.c /Fobuild\ /Fe"build\test_diagnostics.exe" /link shell32.lib advapi32.lib ole32.lib && build\test_diagnostics.exe
       - name: Check hardware API and native window startup
         shell: pwsh
         run: |
