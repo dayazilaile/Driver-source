@@ -13,7 +13,7 @@ typedef struct {
 static const DriverSource driver_sources[] = {
     {L"联想机型驱动包目录", L"联想商用机型、部署驱动包", L"https://download.lenovo.com/cdrt/td/catalogv2.xml", L"目录快照已接入，EXE 包仅下载", "lenovo-pack"},
     {L"戴尔机型驱动包目录", L"Dell 商用整机驱动包", L"https://downloads.dell.com/catalog/DriverPackCatalog.cab", L"目录快照已接入，CAB 支持匹配安装", "dell-pack"},
-    {L"惠普机型驱动包目录", L"HP 商用整机驱动包", L"https://hpia.hpcloud.hp.com/downloads/driverpackcatalog/HPClientDriverPackCatalog.cab", L"机型目录，待自动接入", "hp-pack"},
+    {L"惠普机型驱动包目录", L"HP 商用整机驱动包", L"https://hpia.hpcloud.hp.com/downloads/driverpackcatalog/HPClientDriverPackCatalog.cab", L"目录快照已接入，EXE 包仅下载", "hp-pack"},
     {L"联想中国", L"整机、ThinkPad、主板", L"https://newsupport.lenovo.com.cn/", L"厂商支持页", "lenovo"},
     {L"华为中国", L"MateBook、整机", L"https://consumer.huawei.com/cn/support/driver-list/", L"厂商支持页", "huawei"},
     {L"华硕中国", L"整机、主板、显卡", L"https://www.asus.com.cn/support/download-center/", L"厂商支持页", "asus"},

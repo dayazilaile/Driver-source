@@ -1,6 +1,7 @@
 """Rebuild the OEM model index from pinned, local catalog snapshots.
 No network access or installation. The C build and application do not need Python.
 """
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -52,6 +53,31 @@ def build():
                 if not re.fullmatch('[0-9A-F]{4}', ids):
                     continue
                 rows.append(['dell', model.get('name'), ids, family, '*', pack.get('dateTime', '')[:10], 'https://downloads.dell.com/' + path, sha.text.strip().lower(), pack.get('size'), 'cab' if pack.get('format') == 'cab' else 'exe-download'])
+    # HP SystemId describes the baseboard ID, not the marketing System SKU.
+    hp = ET.parse(folder / 'hp.xml').getroot().find('HPClientDriverPackCatalog')
+    softpaqs = {p.findtext('Id'): p for p in hp.findall('SoftPaqList/SoftPaq')}
+    for product in hp.findall('ProductOSDriverPackList/ProductOSDriverPack'):
+        os_name = product.findtext('OSName', '')
+        os_match = re.fullmatch(r'Windows (10|11) 64-bit, ([0-9]{4}|2[0-9]H[12])', os_name)
+        if product.findtext('Architecture') != '64-bit' or not os_match:
+            continue
+        family = 'win' + os_match[1]
+        release = os_match[2]
+        if family == 'win10' and release.isdigit() and int(release) < 1809:
+            continue
+        pack = softpaqs.get(product.findtext('SoftPaqId'))
+        if pack is None or pack.findtext("Category") != "Manageability - Driver Pack":
+            continue
+        sha = pack.findtext('SHA256', '').lower()
+        url = pack.findtext('Url', '')
+        ids = sorted({i.strip().upper() for i in product.findtext('SystemId', '').split(',') if re.fullmatch('[0-9A-Fa-f]{4}', i.strip())})
+        if not ids or not re.fullmatch('[0-9a-f]{64}', sha) or not url.startswith('https://ftp.hp.com/pub/softpaq/') or not url.lower().endswith('.exe'):
+            continue
+        size = pack.findtext('Size', '')
+        if not size.isdigit() or not 0 < int(size) <= 17179869184:
+            continue
+        date = datetime.strptime(pack.findtext('DateReleased').split()[0], '%m/%d/%Y').strftime('%Y-%m-%d')
+        rows.append(['hp', product.findtext('SystemName'), ';'.join(ids), family, release, date, url, sha, size, 'exe-download'])
     # Retain aliases and OS versions, remove duplicate model/package records.
     rows = sorted({tuple(r) for r in rows})
     output = ['# key\tmanufacturer\tmodel\ttype_or_system_ids\tos_family\tos_release\tdate\thttps_url\tsha256\tbytes_or_0_unknown\tformat']
@@ -64,15 +90,16 @@ def build():
         'upstream_repository': 'https://github.com/OSDeploy/OSD',
         'upstream_commit': SOURCE_COMMIT,
         'license': 'GPL-3.0, data files and generated index; see LICENSE-OSD-GPL-3.0.txt',
-        'snapshot_files': {name: hashlib.sha256((folder / name).read_bytes()).hexdigest() for name in ['lenovo.xml', 'dell.xml']},
-        'original_catalogs': ['https://download.lenovo.com/cdrt/td/catalogv2.xml', 'https://downloads.dell.com/catalog/DriverPackCatalog.cab'],
+        'snapshot_files': {name: hashlib.sha256((folder / name).read_bytes()).hexdigest() for name in ['lenovo.xml', 'dell.xml', 'hp.xml']},
+        'original_catalogs': ['https://download.lenovo.com/cdrt/td/catalogv2.xml', 'https://downloads.dell.com/catalog/DriverPackCatalog.cab', 'https://ftp.hp.com/pub/caps-softpaq/cmit/HPClientDriverPackCatalog.cab'],
         'entries': len(rows),
         'lenovo_models': len({r[1] for r in rows if r[0] == 'lenovo'}),
         'dell_models': len({r[1] for r in rows if r[0] == 'dell'}),
+        'hp_models': len({r[1] for r in rows if r[0] == 'hp'}),
         'payload_validation': 'Catalog metadata and SHA-256 are indexed. Vendor payload URLs are blocked by the development cloud egress policy. Downloads must pass pinned SHA-256 on the user computer. EXE packs support download only.'
     }
     (folder / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n', encoding='utf-8')
-    print(json.dumps({k: provenance[k] for k in ('entries', 'lenovo_models', 'dell_models')}))
+    print(json.dumps({k: provenance[k] for k in ('entries', 'lenovo_models', 'dell_models', 'hp_models')}))
 
 
 if __name__ == '__main__':

@@ -27,7 +27,7 @@
 #include "vendor_download.h"
 #include "update_diagnostics.h"
 
-#define APP_VERSION L"0.3.0"
+#define APP_VERSION L"0.3.1"
 #define MAX_UPDATES 2048
 #define EVENT_MESSAGE (WM_APP + 1)
 #define ID_SCAN 101
@@ -139,7 +139,7 @@ static OemCatalog oem_catalog;
 static char *oem_catalog_text;
 static VendorPackage selected_oem;
 static int oem_match = -1;
-static WCHAR computer_sku[128];
+static WCHAR computer_sku[128], computer_baseboard[128];
 static size_t detected_devices;
 
 static HRESULT load_oem_catalog(void) {
@@ -168,12 +168,14 @@ static HRESULT load_oem_catalog(void) {
 }
 
 static void match_oem_package(void) {
-    char vendor[512], product[512], sku[512];
+    char vendor[512], product[512], sku[512], board[512];
     oem_match = -1;
     if (!WideCharToMultiByte(CP_UTF8, 0, computer_vendor, -1, vendor, sizeof(vendor), NULL, NULL) ||
         !WideCharToMultiByte(CP_UTF8, 0, computer_model, -1, product, sizeof(product), NULL, NULL) ||
-        !WideCharToMultiByte(CP_UTF8, 0, computer_sku, -1, sku, sizeof(sku), NULL, NULL)) return;
-    oem_match = oem_catalog_select(&oem_catalog, vendor, product, sku, windows_build, native_x64);
+        !WideCharToMultiByte(CP_UTF8, 0, computer_sku, -1, sku, sizeof(sku), NULL, NULL) ||
+        !WideCharToMultiByte(CP_UTF8, 0, computer_baseboard, -1, board, sizeof(board), NULL, NULL)) return;
+    OemMachine machine = {vendor, product, sku, board, windows_build, native_x64};
+    oem_match = oem_catalog_select_machine(&oem_catalog, &machine);
     if (oem_match < 0) return;
     const OemPackage *pack = &oem_catalog.packages[oem_match];
     oem_package_as_vendor(pack, &selected_oem);
@@ -187,8 +189,8 @@ static void match_oem_package(void) {
     else StringCchCopyW(amount, ARRAYSIZE(amount), L"大小由下载服务器提供");
     StringCchPrintfW(row->title, ARRAYSIZE(row->title), L"%s 整机驱动包 · %s %s · %s · %s", model,
         family, release, amount, pack->format == VENDOR_EXE_DOWNLOAD ? L"仅下载，需手动安装" : L"支持 INF 匹配安装");
-    StringCchCopyW(row->provider, ARRAYSIZE(row->provider), !strcmp(pack->manufacturer, "lenovo") ? L"联想官方" : L"戴尔官方");
-    StringCchPrintfW(row->hardware, ARRAYSIZE(row->hardware), L"整机型号匹配：%s / SKU %s", computer_model, computer_sku);
+    StringCchCopyW(row->provider, ARRAYSIZE(row->provider), !strcmp(pack->manufacturer, "lenovo") ? L"联想官方" : !strcmp(pack->manufacturer, "dell") ? L"戴尔官方" : L"惠普官方");
+    StringCchPrintfW(row->hardware, ARRAYSIZE(row->hardware), L"型号：%s / SKU %s / 主板 %s", computer_model, computer_sku, computer_baseboard);
     row->index = VENDOR_MAX_PACKAGES;
     emit(EV_UPDATE, row->index, NULL, row);
 }
@@ -233,6 +235,8 @@ static void detect_platform(void) {
     RegGetValueW(HKEY_LOCAL_MACHINE, bios, L"SystemProductName", RRF_RT_REG_SZ, NULL, computer_model, &chars);
     chars = sizeof(computer_sku);
     RegGetValueW(HKEY_LOCAL_MACHINE, bios, L"SystemSKU", RRF_RT_REG_SZ, NULL, computer_sku, &chars);
+    chars = sizeof(computer_baseboard);
+    RegGetValueW(HKEY_LOCAL_MACHINE, bios, L"BaseBoardProduct", RRF_RT_REG_SZ, NULL, computer_baseboard, &chars);
     SYSTEM_INFO system;
     GetNativeSystemInfo(&system);
     native_x64 = system.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64;
@@ -282,12 +286,12 @@ static void publish_diagnostics(HRESULT error, const WCHAR *step) {
     StringCchPrintfW(text, 8192,
         L"驱动源 " APP_VERSION L" · 厂商独立下载模式\r\n"
         L"整机厂商 = %s\r\n整机型号 = %s\r\n进程令牌 = %s\r\nWindows 内部版本 = %u\r\n本机架构符合 x64 安装包 = %s\r\n"
-        L"单设备安装包目录 = %zu 项\r\n整机型号/系统目录 = %zu 条\r\n整机 SKU = %s\r\n整机包匹配 = %s\r\n最近步骤 = %s\r\n最近结果 = 0x%08lX\r\n\r\n"
+        L"单设备安装包目录 = %zu 项\r\n整机型号/系统目录 = %zu 条\r\n整机 SKU = %s\r\n主板标识 = %s\r\n整机包匹配 = %s\r\n最近步骤 = %s\r\n最近结果 = 0x%08lX\r\n\r\n"
         L"检测使用本机设备硬件 ID；下载使用 HTTPS 厂商发布地址。\r\n"
         L"下载完成核对文件大小和 SHA-256，安装由 Windows 检查签名及设备匹配。\r\n"
         L"未收录的硬件不会出现在自动下载列表，可从“本机硬件”查看来源建议。\r\n",
         computer_vendor, computer_model, update_process_elevated() ? L"已提权" : L"未提权", windows_build,
-        native_x64 ? L"是" : L"否", vendor_catalog.count, oem_catalog.count, computer_sku, oem_match >= 0 ? L"已匹配" : L"未匹配", step, (unsigned long)error);
+        native_x64 ? L"是" : L"否", vendor_catalog.count, oem_catalog.count, computer_sku, computer_baseboard, oem_match >= 0 ? L"已匹配" : L"未匹配", step, (unsigned long)error);
     HRESULT log = append_update_log(app_directory, text);
     StringCchCatW(text, 8192, SUCCEEDED(log) ? L"\r\n日志位于软件目录 logs\\DriverSource.log" : L"\r\n日志写入失败，可复制当前诊断文本。");
     emit(EV_DIAGNOSTICS, 0, NULL, text);

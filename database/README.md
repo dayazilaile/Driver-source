@@ -69,6 +69,8 @@ provenance.json 记录固定提交、统计和 SHA-256。source-checks.json 记�
 
 ## 0.3.0 整机型号目录
 
-`oem-packages.tsv` 每行 11 列，依次为唯一 key、厂商（lenovo/dell）、型号名称、以分号分隔的机型代码/System ID、系统家族（win10/win11）、源目录系统版本或 `*`、发布日期、厂商 HTTPS 地址、SHA-256、大小（0 表示未知）、格式（cab/exe-download）。`exe-download` 不自动执行。
+`oem-packages.tsv` 每行 11 列，依次为唯一 key、厂商（lenovo/dell/hp）、型号名称、以分号分隔的机型代码/System ID/惠普主板 ID、系统家族（win10/win11）、源目录系统版本或 `*`、发布日期、厂商 HTTPS 地址、SHA-256、大小（0 表示未知）、格式（cab/exe-download）。`exe-download` 不自动执行。
 
 可选维护命令 `python scripts/build_oem_catalog.py` 根据 `oem-snapshots` 中的固定 XML 重建目录，完整来源及 GPL-3.0 数据许可见该文件夹说明。
+
+0.3.1 新增惠普主板与系统匹配，并保留原始 `oem-snapshots/hp.xml`、其 SHA-256 和 GPL 数据许可。目录目前为 7,238 条型号/系统记录。新增主板读取不会上传设备报告。
