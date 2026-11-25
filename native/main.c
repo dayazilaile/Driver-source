@@ -26,9 +26,11 @@
 #include "oem_catalog.h"
 #include "vendor_download.h"
 #include "update_diagnostics.h"
+#include "driver_status.h"
+#include "installed_driver.h"
 
-#define APP_VERSION L"0.3.1"
-#define MAX_UPDATES 2048
+#define APP_VERSION L"0.3.2"
+#define MAX_UPDATES 4096
 #define EVENT_MESSAGE (WM_APP + 1)
 #define ID_SCAN 101
 #define ID_DOWNLOAD 102
@@ -51,17 +53,20 @@
 #define ID_DIAGNOSTICS 119
 #define ID_COPY_DIAGNOSTICS 120
 #define ID_OPEN_LOGS 121
+#define ID_REINSTALL_LOCAL 122
 
 typedef enum { EV_STATUS, EV_HARDWARE, EV_UPDATE, EV_RESET, EV_PROGRESS,
-               EV_ITEM_STATUS, EV_SUBMITTED, EV_SOURCE_STATUS, EV_DATABASE, EV_DIAGNOSTICS, EV_TRANSFER, EV_DONE, EV_EXIT } EventKind;
+               EV_ITEM_STATUS, EV_SUBMITTED, EV_LOCAL_STATUS, EV_SOURCE_STATUS, EV_DATABASE, EV_DIAGNOSTICS, EV_TRANSFER, EV_DONE, EV_EXIT } EventKind;
 typedef struct {
     WCHAR name[512], hardware[2048], version[128], state[128], package_status[128];
     HardwareIdentity identity;
+    InstalledDriver driver;
 } Hardware;
 typedef struct {
     WCHAR title[512], hardware[1024], provider[256];
-    BOOL processed;
-    int index;
+    WCHAR current_version[128], available_version[128], driver_state[128], advice[192], local_inf[128];
+    BOOL processed, local_available;
+    int index, device_index;
 } Candidate;
 typedef struct {
     EventKind kind;
@@ -79,7 +84,7 @@ typedef struct {
 static HWND main_window, hardware_list, update_list, status_label, progress_bar;
 static HWND scan_button, download_button, cancel_button, source_box, folder_edit;
 static HWND tab_control, folder_button, open_button, all_button, copy_button;
-static HWND auto_install_box, source_list, check_sources_button, open_source_button;
+static HWND auto_install_box, source_list, check_sources_button, open_source_button, reinstall_button;
 static HWND transfer_label, pre_backup_box, backup_description, backup_edit;
 static HWND backup_button, backup_folder_button, open_backup_button, restore_button, restore_description;
 static WCHAR app_directory[MAX_PATH];
@@ -142,6 +147,60 @@ static int oem_match = -1;
 static WCHAR computer_sku[128], computer_baseboard[128];
 static size_t detected_devices;
 
+typedef struct {
+    WCHAR instance_id[MAX_DEVICE_ID_LEN], published_inf[128], version[128];
+    BOOL available;
+} LocalReference;
+static LocalReference local_drivers[MAX_UPDATES];
+static size_t local_driver_count, local_package_devices;
+
+static const WCHAR *advice_text(DriverAdvice advice) {
+    switch (advice) {
+    case DRIVER_LOCAL_MATCH: return L"暂无下载源；可本机匹配安装";
+    case DRIVER_CAN_INSTALL: return L"有适用安装包";
+    case DRIVER_CAN_UPDATE: return L"可更新";
+    case DRIVER_CAN_REINSTALL: return L"同版本，可重新匹配安装";
+    case DRIVER_KEEP_NEWER: return L"本机版本较新，建议保留";
+    case DRIVER_VERSION_UNCERTAIN: return L"有安装包，版本待核对";
+    default: return L"暂无已核验下载源";
+    }
+}
+
+static Candidate *device_candidate(const Hardware *hardware, int package_index, BOOL ambiguous,
+                                    BOOL registered, ULONG flags, ULONG problem, int local_index) {
+    Candidate *row = calloc(1, sizeof(*row));
+    if (!row) return NULL;
+    row->index = package_index;
+    row->device_index = local_index;
+    row->local_available = hardware->driver.local_available;
+    StringCchCopyW(row->local_inf, ARRAYSIZE(row->local_inf), hardware->driver.published_inf);
+    StringCchCopyW(row->title, ARRAYSIZE(row->title), hardware->name);
+    StringCchCopyW(row->hardware, ARRAYSIZE(row->hardware), hardware->hardware);
+    StringCchCopyW(row->provider, ARRAYSIZE(row->provider), hardware->driver.provider[0] ? hardware->driver.provider : L"厂商信息待核对");
+    StringCchCopyW(row->current_version, ARRAYSIZE(row->current_version), hardware->version[0] ? hardware->version : L"未读取到版本");
+    BOOL installed = registered || (flags & DN_DRIVER_LOADED);
+    const WCHAR *state = installed ? L"已安装" : L"信息待核对";
+    if (problem == CM_PROB_FAILED_INSTALL) { installed = FALSE; state = L"缺少驱动（代码 28）"; }
+    else if (problem) state = installed ? L"已安装，设备有问题" : L"设备有问题";
+    StringCchCopyW(row->driver_state, ARRAYSIZE(row->driver_state), state);
+    StringCchCopyW(row->available_version, ARRAYSIZE(row->available_version), L"暂无已核验版本");
+    const VendorPackage *package = package_index >= 0 ? &vendor_catalog.packages[package_index] : NULL;
+    char current[256] = "", available[256] = "";
+    WideCharToMultiByte(CP_UTF8, 0, hardware->version, -1, current, sizeof(current), NULL, NULL);
+    BOOL same_provider = FALSE;
+    if (package) {
+        WCHAR provider[256]; utf8_text(package->provider, provider, ARRAYSIZE(provider));
+        same_provider = hardware->driver.provider[0] && !_wcsicmp(hardware->driver.provider, provider);
+        utf8_text(package->version, row->available_version, ARRAYSIZE(row->available_version));
+        StringCchCopyW(row->provider, ARRAYSIZE(row->provider), provider);
+        StringCchCopyA(available, ARRAYSIZE(available), package->version);
+    }
+    DriverAdvice advice = driver_advice(installed, package != NULL, same_provider,
+        row->local_available, current, available);
+    StringCchCopyW(row->advice, ARRAYSIZE(row->advice), ambiguous ? L"多个候选包，需核对来源" : advice_text(advice));
+    return row;
+}
+
 static HRESULT load_oem_catalog(void) {
     WCHAR path[MAX_PATH]; char error[256];
     HRESULT hr = StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\database\\oem-packages.tsv", app_directory);
@@ -191,6 +250,11 @@ static void match_oem_package(void) {
         family, release, amount, pack->format == VENDOR_EXE_DOWNLOAD ? L"仅下载，需手动安装" : L"支持 INF 匹配安装");
     StringCchCopyW(row->provider, ARRAYSIZE(row->provider), !strcmp(pack->manufacturer, "lenovo") ? L"联想官方" : !strcmp(pack->manufacturer, "dell") ? L"戴尔官方" : L"惠普官方");
     StringCchPrintfW(row->hardware, ARRAYSIZE(row->hardware), L"型号：%s / SKU %s / 主板 %s", computer_model, computer_sku, computer_baseboard);
+    StringCchCopyW(row->driver_state, ARRAYSIZE(row->driver_state), L"整机安装包");
+    StringCchCopyW(row->current_version, ARRAYSIZE(row->current_version), L"各设备分别显示");
+    StringCchCopyW(row->available_version, ARRAYSIZE(row->available_version), L"包内版本待核对");
+    StringCchCopyW(row->advice, ARRAYSIZE(row->advice), pack->format == VENDOR_EXE_DOWNLOAD ? L"整机包仅下载，需手动安装" : L"可下载并提交 INF 匹配安装");
+    row->device_index = -1;
     row->index = VENDOR_MAX_PACKAGES;
     emit(EV_UPDATE, row->index, NULL, row);
 }
@@ -247,37 +311,26 @@ static void detect_platform(void) {
     if (function.typed && function.typed(&version) == 0) windows_build = version.dwBuildNumber;
 }
 
-static void match_vendor_device(HDEVINFO set, SP_DEVINFO_DATA *device, Hardware *hardware) {
-    WCHAR ids[8192] = L"";
-    DWORD type, bytes;
-    BOOL matched = FALSE;
+static int match_vendor_device(HDEVINFO set, SP_DEVINFO_DATA *device, Hardware *hardware, BOOL *ambiguous) {
+    WCHAR ids[8192] = L""; DWORD type, bytes; int match = -1;
+    *ambiguous = FALSE;
     if (SetupDiGetDeviceRegistryPropertyW(set, device, SPDRP_HARDWAREID, &type,
             (BYTE *)ids, sizeof(ids) - 2 * sizeof(WCHAR), &bytes) && type == REG_MULTI_SZ) {
         for (const WCHAR *id = ids; *id; id += wcslen(id) + 1) {
             char utf8[4096];
             if (!WideCharToMultiByte(CP_UTF8, 0, id, -1, utf8, sizeof(utf8), NULL, NULL)) continue;
             for (size_t index = 0; index < vendor_catalog.count; ++index) {
-                const VendorPackage *package = &vendor_catalog.packages[index];
-                if (!vendor_package_matches(package, utf8, windows_build, native_x64)) continue;
-                matched = TRUE;
-                if (vendor_seen[index]) continue;
-                Candidate *row = calloc(1, sizeof(*row));
-                if (!row) continue;
-                WCHAR title[384], version[64];
-                utf8_text(package->title, title, ARRAYSIZE(title));
-                utf8_text(package->version, version, ARRAYSIZE(version));
-                StringCchPrintfW(row->title, ARRAYSIZE(row->title), L"%s · %s", title, version);
-                utf8_text(package->provider, row->provider, ARRAYSIZE(row->provider));
-                StringCchCopyW(row->hardware, ARRAYSIZE(row->hardware), id);
-                row->index = (int)index;
-                vendor_seen[index] = TRUE;
-                ++matched_packages;
-                emit(EV_UPDATE, row->index, NULL, row);
+                if (!vendor_package_matches(&vendor_catalog.packages[index], utf8, windows_build, native_x64)) continue;
+                if (match >= 0 && match != (int)index) *ambiguous = TRUE;
+                match = (int)index;
+                if (!vendor_seen[index]) { vendor_seen[index] = TRUE; ++matched_packages; }
             }
         }
     }
     StringCchCopyW(hardware->package_status, ARRAYSIZE(hardware->package_status),
-        matched ? L"已匹配单设备安装包" : oem_match >= 0 ? L"已提供整机包，设备内容需解压核对" : L"当前目录暂无适用包；可查看来源建议");
+        *ambiguous ? L"多个候选包，待核对" : match >= 0 ? L"已匹配单设备安装包" :
+        oem_match >= 0 ? L"已提供整机包，设备内容需解压核对" : L"暂无适用下载源；已安装驱动仍显示");
+    return *ambiguous ? -1 : match;
 }
 
 static void publish_diagnostics(HRESULT error, const WCHAR *step) {
@@ -289,7 +342,7 @@ static void publish_diagnostics(HRESULT error, const WCHAR *step) {
         L"单设备安装包目录 = %zu 项\r\n整机型号/系统目录 = %zu 条\r\n整机 SKU = %s\r\n主板标识 = %s\r\n整机包匹配 = %s\r\n最近步骤 = %s\r\n最近结果 = 0x%08lX\r\n\r\n"
         L"检测使用本机设备硬件 ID；下载使用 HTTPS 厂商发布地址。\r\n"
         L"下载完成核对文件大小和 SHA-256，安装由 Windows 检查签名及设备匹配。\r\n"
-        L"未收录的硬件不会出现在自动下载列表，可从“本机硬件”查看来源建议。\r\n",
+        L"主列表显示已检测设备及已安装版本；只有已匹配包的项目可下载。可从“本机硬件”查看来源建议。\r\n",
         computer_vendor, computer_model, update_process_elevated() ? L"已提权" : L"未提权", windows_build,
         native_x64 ? L"是" : L"否", vendor_catalog.count, oem_catalog.count, computer_sku, computer_baseboard, oem_match >= 0 ? L"已匹配" : L"未匹配", step, (unsigned long)error);
     HRESULT log = append_update_log(app_directory, text);
@@ -316,12 +369,6 @@ static void report_error(const WCHAR *operation, HRESULT error) {
     emit(EV_STATUS, 0, message, NULL);
 }
 
-static void read_registry_string(HKEY key, const WCHAR *name, WCHAR *buffer, DWORD chars) {
-    DWORD bytes = chars * sizeof(WCHAR);
-    if (RegGetValueW(key, NULL, name, RRF_RT_REG_SZ, NULL, buffer, &bytes) != ERROR_SUCCESS)
-        buffer[0] = 0;
-}
-
 static void scan_hardware(const HardwareDatabase *database) {
     HDEVINFO set = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
     SP_DEVINFO_DATA device = { .cbSize = sizeof(device) };
@@ -346,11 +393,8 @@ static void scan_hardware(const HardwareDatabase *database) {
         /* SPDRP_HARDWAREID is MULTI_SZ. Display the most specific first ID. */
         SetupDiGetDeviceRegistryPropertyW(set, &device, SPDRP_HARDWAREID, &type,
                 (BYTE *)row->hardware, sizeof(row->hardware) - sizeof(WCHAR), &bytes);
-        HKEY key = SetupDiOpenDevRegKey(set, &device, DICS_FLAG_GLOBAL, 0, DIREG_DRV, KEY_READ);
-        if (key != INVALID_HANDLE_VALUE) {
-            read_registry_string(key, L"DriverVersion", row->version, ARRAYSIZE(row->version));
-            RegCloseKey(key);
-        }
+        installed_driver_read(set, &device, &row->driver);
+        StringCchCopyW(row->version, ARRAYSIZE(row->version), row->driver.version);
         if (CM_Get_DevNode_Status(&flags, &problem, device.DevInst, 0) == CR_SUCCESS && (flags & DN_HAS_PROBLEM))
             StringCchPrintfW(row->state, ARRAYSIZE(row->state), L"设备问题 %lu", (unsigned long)problem);
         else
@@ -358,13 +402,28 @@ static void scan_hardware(const HardwareDatabase *database) {
         hardware_identify(database, set, &device, &row->identity);
         if (!row->hardware[0])
             StringCchCopyW(row->hardware, ARRAYSIZE(row->hardware), row->identity.primary_id);
-        match_vendor_device(set, &device, row);
+        if (!row->name[0]) StringCchCopyW(row->name, ARRAYSIZE(row->name), row->hardware[0] ? row->hardware : L"未命名设备");
+        BOOL ambiguous;
+        int package_index = match_vendor_device(set, &device, row, &ambiguous);
+        Candidate *candidate = NULL;
+        if (local_driver_count < MAX_UPDATES - 1) {
+            int local_index = (int)local_driver_count++;
+            LocalReference *reference = &local_drivers[local_index];
+            ZeroMemory(reference, sizeof(*reference));
+            BOOL instance_ok = CM_Get_Device_IDW(device.DevInst, reference->instance_id, ARRAYSIZE(reference->instance_id), 0) == CR_SUCCESS;
+            reference->available = instance_ok && row->driver.local_available;
+            if (!reference->available) row->driver.local_available = FALSE;
+            if (reference->available) ++local_package_devices;
+            StringCchCopyW(reference->published_inf, ARRAYSIZE(reference->published_inf), row->driver.published_inf);
+            StringCchCopyW(reference->version, ARRAYSIZE(reference->version), row->version);
+            candidate = device_candidate(row, package_index, ambiguous, row->driver.registered, flags, problem, local_index);
+        }
         WCHAR device_log[3400];
         StringCchPrintfW(device_log, ARRAYSIZE(device_log), L"硬件 %s | %s | 驱动版本 %s | %s", row->name, row->hardware, row->version, row->package_status);
         append_update_log(app_directory, device_log);
         ++detected_devices;
-        if (row->name[0]) emit(EV_HARDWARE, 0, NULL, row);
-        else free(row);
+        emit(EV_HARDWARE, 0, NULL, row);
+        if (candidate) emit(EV_UPDATE, candidate->index, NULL, candidate);
     }
     SetupDiDestroyDeviceInfoList(set);
 }
@@ -460,6 +519,59 @@ static HRESULT download_selected(const Task *task) {
     return outcome;
 }
 
+static HRESULT reinstall_local(const Task *task) {
+    if (task->pre_backup) {
+        HRESULT hr = create_backup(task);
+        if (FAILED(hr) || should_cancel()) return FAILED(hr) ? hr : HRESULT_FROM_WIN32(ERROR_CANCELLED);
+    }
+    int completed = 0, failed = 0;
+    BOOL reboot = FALSE;
+    HRESULT outcome = S_OK;
+    for (int item = 0; item < task->count && !should_cancel() && !reboot; ++item) {
+        int index = task->indices[item];
+        if (index < 0 || (size_t)index >= local_driver_count || !local_drivers[index].available) {
+            ++failed; outcome = E_INVALIDARG; continue;
+        }
+        const LocalReference *reference = &local_drivers[index];
+        WCHAR inf[MAX_PATH], folder[MAX_PATH] = L"", guid[40], text[1024]; GUID id;
+        emit(EV_LOCAL_STATUS, index, L"正在核对本机驱动包…", NULL);
+        HRESULT hr = installed_driver_check(reference->instance_id, reference->published_inf,
+            reference->version, inf, ARRAYSIZE(inf));
+        if (SUCCEEDED(hr) && should_cancel()) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+        if (SUCCEEDED(hr)) hr = CoCreateGuid(&id);
+        if (SUCCEEDED(hr)) {
+            StringFromGUID2(&id, guid, ARRAYSIZE(guid));
+            hr = StringCchPrintfW(folder, ARRAYSIZE(folder), L"%s\\LocalMatch-%s", task->folder, guid);
+        }
+        if (SUCCEEDED(hr) && !CreateDirectoryW(folder, NULL)) hr = HRESULT_FROM_WIN32(GetLastError());
+        if (SUCCEEDED(hr) && !should_cancel()) {
+            emit(EV_STATUS, 0, L"正在使用本机已安装的驱动包重新匹配安装。Windows 可能保留当前同版本，详情见 install.log。", NULL);
+            emit(EV_PROGRESS, -1, NULL, NULL);
+            emit(EV_TRANSFER, 0, L"使用本机驱动包，等待 Windows 完成匹配安装…", NULL);
+            hr = vendor_install_inf(inf, folder, &reboot);
+        } else if (SUCCEEDED(hr)) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+        log_update_result(L"本机驱动库匹配安装", hr);
+        if (folder[0]) append_update_log(app_directory, folder);
+        if (SUCCEEDED(hr)) {
+            ++completed;
+            emit(EV_LOCAL_STATUS, index, reboot ? L"已提交本机匹配安装，需要重启" : L"已提交本机匹配安装，同版可能保留", NULL);
+        } else {
+            ++failed; outcome = hr;
+            StringCchPrintfW(text, ARRAYSIZE(text), hr == HRESULT_FROM_WIN32(ERROR_RETRY) ?
+                L"驱动状态已变化，请重新检测（0x%08lX）" : L"本机匹配安装失败 0x%08lX", (unsigned long)hr);
+            emit(EV_LOCAL_STATUS, index, text, NULL);
+        }
+        emit(EV_PROGRESS, (item + 1) * 100 / task->count, NULL, NULL);
+    }
+    WCHAR summary[1024];
+    StringCchPrintfW(summary, ARRAYSIZE(summary), L"本机匹配安装：提交 %d 个驱动包，失败 %d 个，未执行 %d 个。%s",
+        completed, failed, task->count - completed - failed, reboot ? L"请保存工作后手动重启。" :
+        L"Windows 可能保留已安装的最佳驱动；可重新检测刷新当前版本，详情见所选目录的 LocalMatch 日志。");
+    emit(EV_STATUS, 0, summary, NULL);
+    if (should_cancel() && SUCCEEDED(outcome)) outcome = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+    return outcome;
+}
+
 static void check_sources(const Task *task) {
     HINTERNET session = WinHttpOpen(L"DriverSource/" APP_VERSION,
         WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -531,7 +643,7 @@ static DWORD WINAPI worker_main(void *unused) {
         if (task.command == ID_SCAN) {
             emit(EV_RESET, 0, NULL, NULL);
             ZeroMemory(vendor_seen, sizeof(vendor_seen));
-            matched_packages = 0; detected_devices = 0;
+            matched_packages = 0; detected_devices = 0; local_driver_count = 0; local_package_devices = 0;
             match_oem_package();
             scan_hardware(&database);
             last_error = FAILED(catalog_hr) ? catalog_hr : oem_hr; last_step = L"本机硬件与厂商驱动包匹配";
@@ -542,10 +654,14 @@ static DWORD WINAPI worker_main(void *unused) {
                 if (!native_x64 || windows_build < 17763)
                     StringCchCopyW(message, ARRAYSIZE(message), L"当前安装包目录支持 Windows 10 1809 及以上 x64 系统。其他系统仍可查看硬件与来源建议。");
                 else StringCchPrintfW(message, ARRAYSIZE(message),
-                    L"%s已检测 %zu 个设备，匹配 %zu 个单设备包、%d 个整机包。目录记录不代表缺失驱动，正常设备也可能无需额外安装。",
-                    should_cancel() ? L"扫描已取消。" : L"检测完成。", detected_devices, matched_packages, oem_match >= 0 ? 1 : 0);
+                    L"%s已检测 %zu 个设备及当前驱动，匹配 %zu 个单设备包、%d 个整机包；%zu 个设备有本机第三方驱动包。暂无来源的项目也会显示。",
+                    should_cancel() ? L"扫描已取消。" : L"检测完成。", detected_devices, matched_packages, oem_match >= 0 ? 1 : 0, local_package_devices);
                 emit(EV_STATUS, 0, message, NULL);
             }
+            publish_diagnostics(last_error, last_step);
+        } else if (task.command == ID_REINSTALL_LOCAL) {
+            last_error = reinstall_local(&task);
+            last_step = L"本机驱动库匹配安装";
             publish_diagnostics(last_error, last_step);
         } else if (task.command == ID_DIAGNOSTICS) {
             publish_diagnostics(last_error, last_step);
@@ -603,7 +719,13 @@ static void set_busy(BOOL value) {
     EnableWindow(scan_button, !value);
     EnableWindow(update_list, !value);
     EnableWindow(source_box, !value);
-    EnableWindow(download_button, !value && candidate_count > 0);
+    BOOL can_download = FALSE, can_local = FALSE;
+    for (int i = 0; i < candidate_count; ++i) {
+        if (candidates[i]->index >= 0 && !candidates[i]->processed) can_download = TRUE;
+        if (candidates[i]->local_available) can_local = TRUE;
+    }
+    EnableWindow(download_button, !value && can_download);
+    EnableWindow(reinstall_button, !value && can_local);
     EnableWindow(folder_button, !value);
     EnableWindow(folder_edit, !value);
     EnableWindow(all_button, !value);
@@ -646,6 +768,51 @@ static void start_task(Task *task) {
     SetEvent(task_event);
 }
 
+static BOOL candidate_selectable(const Candidate *row) {
+    return row->local_available || (row->index >= 0 && !row->processed);
+}
+
+static void start_local_reinstall(void) {
+    if (busy) return;
+    Task task = {.command = ID_REINSTALL_LOCAL, .install = TRUE};
+    task.pre_backup = SendMessageW(pre_backup_box, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    GetWindowTextW(backup_edit, task.backup_root, ARRAYSIZE(task.backup_root));
+    GetWindowTextW(folder_edit, task.folder, ARRAYSIZE(task.folder));
+    if (!update_process_elevated()) {
+        MessageBoxW(main_window, L"本机驱动匹配安装需要管理员权限。", L"安装权限", MB_OK); return;
+    }
+    if (!task.folder[0] || PathIsRelativeW(task.folder) || wcslen(task.folder) > 150 ||
+        (task.pre_backup && (!task.backup_root[0] || PathIsRelativeW(task.backup_root) || wcslen(task.backup_root) > 150))) {
+        MessageBoxW(main_window, L"请选择完整且较短的日志保存目录及备份目录。", L"保存位置", MB_OK); return;
+    }
+    int selected_devices = 0;
+    for (int i = 0; i < candidate_count; ++i) {
+        Candidate *row = candidates[i];
+        if (!ListView_GetCheckState(update_list, i) || !row->local_available || row->device_index < 0) continue;
+        ++selected_devices;
+        BOOL duplicate = FALSE;
+        for (int earlier = 0; earlier < i; ++earlier) {
+            Candidate *previous = candidates[earlier];
+            if (ListView_GetCheckState(update_list, earlier) && previous->local_available &&
+                !_wcsicmp(row->local_inf, previous->local_inf)) duplicate = TRUE;
+        }
+        if (!duplicate) task.indices[task.count++] = row->device_index;
+    }
+    if (!task.count) {
+        MessageBoxW(main_window, L"请勾选可从本机驱动库匹配安装的设备。Windows 系统自带包由系统维护。", L"选择设备", MB_OK); return;
+    }
+    WCHAR message[1024];
+    StringCchPrintfW(message, ARRAYSIZE(message),
+        L"已选择 %d 个设备，对应 %d 个本机第三方驱动包。\n\n将使用设备当前登记的驱动包重新提交系统匹配安装。Windows 可能保留当前同版本，不强制降级或替换。%s\n\n继续？",
+        selected_devices, task.count, task.pre_backup ? L"安装前会备份现有第三方驱动。" : L"");
+    if (MessageBoxW(main_window, message, L"本机驱动匹配安装", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+    int error = SHCreateDirectoryExW(main_window, task.folder, NULL);
+    if (error != ERROR_SUCCESS && error != ERROR_ALREADY_EXISTS) {
+        MessageBoxW(main_window, L"无法创建日志目录。", L"保存位置", MB_OK); return;
+    }
+    start_task(&task);
+}
+
 static void start_download(void) {
     Task task = { .command = ID_DOWNLOAD };
     if (busy) return;
@@ -675,11 +842,13 @@ static void start_download(void) {
     for (int row_index = 0; row_index < candidate_count; ++row_index) {
         if (!ListView_GetCheckState(update_list, row_index)) continue;
         Candidate *row = candidates[row_index];
-        if (row->processed) continue;
-        task.indices[task.count++] = row->index;
+        if (row->processed || row->index < 0) continue;
+        BOOL duplicate = FALSE;
+        for (int i = 0; i < task.count; ++i) if (task.indices[i] == row->index) duplicate = TRUE;
+        if (!duplicate) task.indices[task.count++] = row->index;
     }
     if (!task.count) {
-        MessageBoxW(main_window, L"请勾选需要下载的驱动。", L"选择驱动", MB_OK);
+        MessageBoxW(main_window, L"请勾选已有厂商安装包的项目。已安装但暂无下载源的设备，可查看本机匹配安装选项。", L"选择驱动", MB_OK);
         return;
     }
     int error = SHCreateDirectoryExW(main_window, task.folder, NULL);
@@ -845,6 +1014,7 @@ static void show_tab(void) {
     ShowWindow(check_sources_button, tab == 2 ? SW_SHOW : SW_HIDE);
     ShowWindow(open_source_button, tab == 2 ? SW_SHOW : SW_HIDE);
     ShowWindow(auto_install_box, tab == 0 ? SW_SHOW : SW_HIDE);
+    ShowWindow(reinstall_button, tab == 0 ? SW_SHOW : SW_HIDE);
     ShowWindow(diagnostics_edit, tab == 4 ? SW_SHOW : SW_HIDE);
     ShowWindow(diagnostics_button, tab == 4 ? SW_SHOW : SW_HIDE);
     ShowWindow(copy_diagnostics_button, tab == 4 ? SW_SHOW : SW_HIDE);
@@ -882,7 +1052,7 @@ static void create_controls(HWND window) {
     SendMessageW(source_box, CB_SETCURSEL, 0, 0);
     cancel_button = control(window, L"BUTTON", L"取消", WS_TABSTOP, ID_CANCEL);
     tab_control = control(window, WC_TABCONTROLW, L"", WS_TABSTOP, ID_TAB);
-    TCITEMW tab = { .mask = TCIF_TEXT, .pszText = L"可下载驱动" };
+    TCITEMW tab = { .mask = TCIF_TEXT, .pszText = L"驱动管理" };
     TabCtrl_InsertItem(tab_control, 0, &tab);
     tab.pszText = L"本机硬件";
     TabCtrl_InsertItem(tab_control, 1, &tab);
@@ -893,11 +1063,15 @@ static void create_controls(HWND window) {
     tab.pszText = L"系统诊断";
     TabCtrl_InsertItem(tab_control, 4, &tab);
     update_list = control(window, WC_LISTVIEWW, L"", LVS_REPORT | LVS_SHOWSELALWAYS | WS_TABSTOP | WS_BORDER, 0);
-    ListView_SetExtendedListViewStyle(update_list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    add_column(update_list, 0, L"适用驱动及版本", 400);
-    add_column(update_list, 1, L"厂商", 130);
-    add_column(update_list, 2, L"匹配硬件 ID", 280);
-    add_column(update_list, 3, L"下载状态", 170);
+    ListView_SetExtendedListViewStyle(update_list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
+    add_column(update_list, 0, L"本机设备 / 安装包", 290);
+    add_column(update_list, 1, L"驱动状态", 120);
+    add_column(update_list, 2, L"当前版本", 145);
+    add_column(update_list, 3, L"可用版本", 145);
+    add_column(update_list, 4, L"建议 / 可用操作", 250);
+    add_column(update_list, 5, L"厂商 / 包来源", 180);
+    add_column(update_list, 6, L"处理结果", 280);
+    add_column(update_list, 7, L"硬件 ID", 300);
     hardware_list = control(window, WC_LISTVIEWW, L"", LVS_REPORT | LVS_SHOWSELALWAYS | WS_TABSTOP | WS_BORDER, 0);
     ListView_SetExtendedListViewStyle(hardware_list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     add_column(hardware_list, 0, L"本机设备", 280);
@@ -909,6 +1083,9 @@ static void create_controls(HWND window) {
     add_column(hardware_list, 6, L"识别依据", 230);
     add_column(hardware_list, 7, L"来源建议", 300);
     add_column(hardware_list, 8, L"厂商安装包收录状态", 290);
+    add_column(hardware_list, 9, L"驱动提供商", 180);
+    add_column(hardware_list, 10, L"已安装 INF", 140);
+    add_column(hardware_list, 11, L"驱动日期", 150);
     database_summary = control(window, L"STATIC", L"正在加载离线识别库…", 0, 0);
     device_sources_button = control(window, L"BUTTON", L"查看设备来源建议", WS_TABSTOP, ID_DEVICE_SOURCES);
     source_list = control(window, WC_LISTVIEWW, L"", LVS_REPORT | LVS_SHOWSELALWAYS | WS_TABSTOP | WS_BORDER, 0);
@@ -924,7 +1101,8 @@ static void create_controls(HWND window) {
     open_source_button = control(window, L"BUTTON", L"打开所选官方来源", WS_TABSTOP, ID_OPEN_SOURCE);
     auto_install_box = control(window, L"BUTTON", L"下载后自动安装", WS_TABSTOP | BS_AUTOCHECKBOX, ID_AUTO_INSTALL);
     SendMessageW(auto_install_box, BM_SETCHECK, BST_CHECKED, 0);
-    all_button = control(window, L"BUTTON", L"全选 / 取消全选", WS_TABSTOP, ID_ALL);
+    all_button = control(window, L"BUTTON", L"全选可操作项", WS_TABSTOP, ID_ALL);
+    reinstall_button = control(window, L"BUTTON", L"本机驱动匹配安装", WS_TABSTOP, ID_REINSTALL_LOCAL);
     copy_button = control(window, L"BUTTON", L"复制所选硬件 ID", WS_TABSTOP, ID_COPY);
     folder_edit = control(window, L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 0);
     folder_button = control(window, L"BUTTON", L"保存位置…", WS_TABSTOP, ID_FOLDER);
@@ -975,7 +1153,8 @@ static void resize_controls(int width, int height) {
     MoveWindow(check_sources_button, 16, height - 210, 165, 28, TRUE);
     MoveWindow(open_source_button, 192, height - 210, 190, 28, TRUE);
     MoveWindow(auto_install_box, 205, height - 210, 180, 28, TRUE);
-    MoveWindow(pre_backup_box, 440, height - 210, 240, 28, TRUE);
+    MoveWindow(pre_backup_box, 420, height - 210, 230, 28, TRUE);
+    MoveWindow(reinstall_button, width - 200, height - 210, 184, 28, TRUE);
     MoveWindow(all_button, 16, height - 210, 160, 28, TRUE);
     MoveWindow(copy_button, 16, height - 210, 180, 28, TRUE);
     MoveWindow(backup_description, 36, 112, width - 72, 54, TRUE);
@@ -1035,6 +1214,9 @@ static void process_event(Event *event) {
             }
             ListView_SetItemText(hardware_list, index, 7, sources[0] ? sources : L"请查看全部厂商来源");
             ListView_SetItemText(hardware_list, index, 8, row->package_status);
+            ListView_SetItemText(hardware_list, index, 9, row->driver.provider);
+            ListView_SetItemText(hardware_list, index, 10, row->driver.published_inf);
+            ListView_SetItemText(hardware_list, index, 11, row->driver.date);
         }
     } else if (event->kind == EV_UPDATE) {
         Candidate *row = event->data;
@@ -1044,9 +1226,13 @@ static void process_event(Event *event) {
             event->data = NULL;
             LVITEMW item = { .mask = LVIF_TEXT, .iItem = index, .pszText = row->title };
             ListView_InsertItem(update_list, &item);
-            ListView_SetItemText(update_list, index, 1, row->provider);
-            ListView_SetItemText(update_list, index, 2, row->hardware);
-            ListView_SetItemText(update_list, index, 3, L"可下载");
+            ListView_SetItemText(update_list, index, 1, row->driver_state);
+            ListView_SetItemText(update_list, index, 2, row->current_version);
+            ListView_SetItemText(update_list, index, 3, row->available_version);
+            ListView_SetItemText(update_list, index, 4, row->advice);
+            ListView_SetItemText(update_list, index, 5, row->provider);
+            ListView_SetItemText(update_list, index, 6, L"尚未执行");
+            ListView_SetItemText(update_list, index, 7, row->hardware);
         }
     } else if (event->kind == EV_STATUS) {
         SetWindowTextW(status_label, event->text);
@@ -1055,11 +1241,21 @@ static void process_event(Event *event) {
     } else if (event->kind == EV_ITEM_STATUS || event->kind == EV_SUBMITTED) {
         for (int index = 0; index < candidate_count; ++index) {
             if (candidates[index]->index != event->index) continue;
-            ListView_SetItemText(update_list, index, 3, event->text);
+            ListView_SetItemText(update_list, index, 6, event->text);
             if (event->kind == EV_SUBMITTED) {
                 candidates[index]->processed = TRUE;
+                ListView_SetItemText(update_list, index, 4, L"已提交安装，请重新检测刷新版本");
                 ListView_SetCheckState(update_list, index, FALSE);
             }
+        }
+    } else if (event->kind == EV_LOCAL_STATUS) {
+        const WCHAR *inf = NULL;
+        for (int i = 0; i < candidate_count; ++i)
+            if (candidates[i]->device_index == event->index) { inf = candidates[i]->local_inf; break; }
+        if (inf && *inf) for (int i = 0; i < candidate_count; ++i) {
+            if (!candidates[i]->local_available || _wcsicmp(candidates[i]->local_inf, inf)) continue;
+            ListView_SetItemText(update_list, i, 6, event->text);
+            ListView_SetCheckState(update_list, i, FALSE);
         }
     } else if (event->kind == EV_TRANSFER) {
         SetWindowTextW(transfer_label, event->text);
@@ -1102,9 +1298,16 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
     }
     if (message == WM_GETMINMAXINFO) {
         MINMAXINFO *limits = (MINMAXINFO *)lp;
-        limits->ptMinTrackSize.x = 850;
+        limits->ptMinTrackSize.x = 1000;
         limits->ptMinTrackSize.y = 640;
         return 0;
+    }
+    if (message == WM_NOTIFY && ((NMHDR *)lp)->hwndFrom == update_list &&
+        ((NMHDR *)lp)->code == LVN_ITEMCHANGING) {
+        NMLISTVIEW *change = (NMLISTVIEW *)lp;
+        if (change->iItem >= 0 && change->iItem < candidate_count && (change->uChanged & LVIF_STATE) &&
+            (change->uNewState & LVIS_STATEIMAGEMASK) == INDEXTOSTATEIMAGEMASK(2) &&
+            !candidate_selectable(candidates[change->iItem])) return TRUE;
     }
     if (message == WM_NOTIFY && ((NMHDR *)lp)->hwndFrom == tab_control &&
         ((NMHDR *)lp)->code == TCN_SELCHANGE) {
@@ -1129,6 +1332,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
             }
             break;
         case ID_DOWNLOAD: start_download(); break;
+        case ID_REINSTALL_LOCAL: start_local_reinstall(); break;
         case ID_AUTO_INSTALL:
             SetWindowTextW(download_button, SendMessageW(auto_install_box, BM_GETCHECK, 0, 0) == BST_CHECKED ?
                            L"下载并安装" : L"仅下载");
@@ -1194,9 +1398,9 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         case ID_ALL: {
             BOOL all = TRUE;
             for (int index = 0; index < candidate_count; ++index)
-                if (!candidates[index]->processed && !ListView_GetCheckState(update_list, index)) all = FALSE;
+                if (candidate_selectable(candidates[index]) && !ListView_GetCheckState(update_list, index)) all = FALSE;
             for (int index = 0; index < candidate_count; ++index)
-                ListView_SetCheckState(update_list, index, !all && !candidates[index]->processed);
+                ListView_SetCheckState(update_list, index, !all && candidate_selectable(candidates[index]));
             break;
         }
         }
@@ -1214,10 +1418,48 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
     return DefWindowProcW(window, message, wp, lp);
 }
 
+static int inventory_ui_test(void) {
+    Hardware hardware = {0};
+    StringCchCopyW(hardware.name, ARRAYSIZE(hardware.name), L"Installed device without catalog source");
+    StringCchCopyW(hardware.hardware, ARRAYSIZE(hardware.hardware), L"PCI\\VEN_1234&DEV_5678");
+    StringCchCopyW(hardware.version, ARRAYSIZE(hardware.version), L"31.0.15.5161");
+    StringCchCopyW(hardware.driver.provider, ARRAYSIZE(hardware.driver.provider), L"Example provider");
+    Candidate *first = device_candidate(&hardware, -1, FALSE, TRUE, DN_DRIVER_LOADED, 0, 0);
+    Event *event = calloc(1, sizeof(*event));
+    if (!first || !event) { free(first); free(event); return 20; }
+    event->kind = EV_UPDATE; event->data = first;
+    process_event(event);
+    set_busy(FALSE);
+    WCHAR text[128];
+    if (ListView_GetItemCount(update_list) != 1) return 21;
+    ListView_GetItemText(update_list, 0, 1, text, ARRAYSIZE(text));
+    if (wcscmp(text, L"已安装")) return 22;
+    ListView_GetItemText(update_list, 0, 2, text, ARRAYSIZE(text));
+    if (wcscmp(text, hardware.version)) return 23;
+    ListView_GetItemText(update_list, 0, 3, text, ARRAYSIZE(text));
+    if (wcscmp(text, L"暂无已核验版本")) return 24;
+    if (IsWindowEnabled(download_button) || IsWindowEnabled(reinstall_button)) return 25;
+    ListView_SetCheckState(update_list, 0, TRUE);
+    if (ListView_GetCheckState(update_list, 0)) return 26;
+    hardware.driver.local_available = TRUE;
+    StringCchCopyW(hardware.driver.published_inf, ARRAYSIZE(hardware.driver.published_inf), L"oem123.inf");
+    Candidate *second = device_candidate(&hardware, -1, FALSE, TRUE, DN_DRIVER_LOADED, 0, 1);
+    event = calloc(1, sizeof(*event));
+    if (!second || !event) { free(second); free(event); return 27; }
+    event->kind = EV_UPDATE; event->data = second; process_event(event); set_busy(FALSE);
+    if (ListView_GetItemCount(update_list) != 2 || IsWindowEnabled(download_button) || !IsWindowEnabled(reinstall_button)) return 28;
+    SendMessageW(main_window, WM_COMMAND, ID_ALL, 0);
+    if (ListView_GetCheckState(update_list, 0) || !ListView_GetCheckState(update_list, 1)) return 29;
+    SendMessageW(main_window, WM_COMMAND, ID_ALL, 0);
+    if (ListView_GetCheckState(update_list, 1)) return 30;
+    ListView_DeleteAllItems(update_list); clear_candidates(); set_busy(FALSE);
+    return 0;
+}
+
 static int window_smoke_test(void) {
     WCHAR expected[MAX_PATH], actual[MAX_PATH];
     if (!folder_edit || !backup_edit || !transfer_label || !progress_bar || !backup_button ||
-        !restore_button || !pre_backup_box || !diagnostics_edit || !diagnostics_button) return 5;
+        !restore_button || !pre_backup_box || !diagnostics_edit || !diagnostics_button || !reinstall_button) return 5;
     if (!PathCombineW(expected, app_directory, L"下载")) return 6;
     GetWindowTextW(folder_edit, actual, ARRAYSIZE(actual));
     if (wcscmp(expected, actual)) return 7;
@@ -1242,7 +1484,8 @@ static int window_smoke_test(void) {
     free(oem_catalog_text); oem_catalog_text = NULL; ZeroMemory(&oem_catalog, sizeof(oem_catalog));
     if (!oem_loaded) return 15;
     if (SendMessageW(source_box, CB_GETCOUNT, 0, 0) != 1) return 14;
-    return ListView_GetItemCount(source_list) == (int)ARRAYSIZE(driver_sources) ? 0 : 12;
+    if (ListView_GetItemCount(source_list) != (int)ARRAYSIZE(driver_sources)) return 12;
+    return inventory_ui_test();
 }
 
 static int self_test(void) {

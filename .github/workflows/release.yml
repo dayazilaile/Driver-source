@@ -28,6 +28,12 @@ jobs:
       - name: Check hardware database matching
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_device_db.c native/device_db.c -o build/test_device_db.exe && ./build/test_device_db.exe
+      - name: Check installed driver advice and version comparisons
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_driver_status.c native/driver_status.c -o build/test_driver_status.exe && ./build/test_driver_status.exe
+      - name: Check read-only Windows installed driver inventory
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_installed_driver.c native/installed_driver.c -o build/test_installed_driver.exe -lsetupapi -ladvapi32 && ./build/test_installed_driver.exe
       - name: Check vendor catalog matching
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_vendor_catalog.c native/vendor_catalog.c -o build/test_vendor_catalog.exe && ./build/test_vendor_catalog.exe
@@ -99,6 +105,12 @@ jobs:
       - name: Check hardware database matching
         shell: cmd
         run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_device_db.c native\device_db.c /Fobuild\ /Fe"build\test_device_db.exe" && build\test_device_db.exe
+      - name: Check installed driver advice and version comparisons
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_driver_status.c native\driver_status.c /Fobuild\ /Fe"build\test_driver_status.exe" && build\test_driver_status.exe
+      - name: Check read-only Windows installed driver inventory
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_installed_driver.c native\installed_driver.c /Fobuild\ /Fe"build\test_installed_driver.exe" /link setupapi.lib advapi32.lib && build\test_installed_driver.exe
       - name: Check vendor catalog matching
         shell: cmd
         run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_vendor_catalog.c native\vendor_catalog.c /Fobuild\ /Fe"build\test_vendor_catalog.exe" && build\test_vendor_catalog.exe

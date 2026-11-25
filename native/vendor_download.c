@@ -86,7 +86,7 @@ HRESULT vendor_download_package(const VendorPackage *package, const WCHAR *root,
     hr = StringCchPrintfW(target, ARRAYSIZE(target), L"%s%s", path, extra);
     if (FAILED(hr)) return hr;
     if (cancelled()) return HRESULT_FROM_WIN32(ERROR_CANCELLED);
-    session = WinHttpOpen(L"DriverSource Vendor/0.3.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    session = WinHttpOpen(L"DriverSource Vendor/0.3.2", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                          WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) goto winerror;
     WinHttpSetTimeouts(session, 10000, 10000, 20000, 20000);
