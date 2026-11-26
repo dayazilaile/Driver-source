@@ -26,8 +26,8 @@ jobs:
         shell: msys2 {0}
         run: MSYS2_ARG_CONV_EXCL='*' cmd.exe /c build-windows.bat mingw
       - name: Check extracted source kit with Windows PowerShell 5.1
-        shell: powershell
-        run: ./tests/test_source_kit.ps1 -Toolchain mingw
+        shell: msys2 {0}
+        run: powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/test_source_kit.ps1 -Toolchain mingw
       - name: Check transfer calculations
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_transfer.c -o build/test_transfer.exe && ./build/test_transfer.exe
