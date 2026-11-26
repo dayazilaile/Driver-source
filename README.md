@@ -1,4 +1,4 @@
-# 驱动源 · C 原生版 0.3.2
+# 驱动源 · C 原生版 0.3.3
 
 Windows 10 1809 及以上 x64 的厂商驱动检测、下载与匹配安装工具，使用 C17 和 Win32 系统 API。
 
@@ -14,7 +14,7 @@ Windows 10 1809 及以上 x64 的厂商驱动检测、下载与匹配安装工�
 
 ## 使用
 
-从 [0.3.2 发行版](https://github.com/dayazilaile/Driver-source/releases/tag/v0.3.2) 下载 `DriverSource-Windows-x64.zip`，完整解压，保留 EXE 旁的 `database` 文件夹。运行 `DriverSource.exe` 后由程序自动检测硬件、整机厂商和型号、Windows 内部版本、原生架构。
+从 [0.3.3 发行版](https://github.com/dayazilaile/Driver-source/releases/tag/v0.3.3) 下载 `DriverSource-Windows-x64.zip`，完整解压，保留 EXE 旁的 `database` 文件夹。运行 `DriverSource.exe` 后由程序自动检测硬件、整机厂商和型号、Windows 内部版本、原生架构。
 
 1. “驱动管理”始终逐项显示本机设备、驱动状态、当前版本、可用版本、建议和处理结果。已安装的设备、没有目录匹配的设备也会显示；最多列出 4,095 个设备和一个整机候选包。
 2. “本机硬件”显示检测到的设备及目录匹配状态。已枚举的设备包含正常设备和虚拟设备；没有包记录不表示缺少驱动。整机包是否包含某个设备，应以包内 INF 为准。
@@ -101,6 +101,13 @@ USB 数据快照为 2026.06.26，PCI 数据快照为 2026.11.22。来源提交�
 程序链接 Windows 系统库。编译器可以沿用现有工具链，无需安装额外的运行库或包管理器。
 
 ### 一键编译
+
+自行编译请下载 `DriverSource-Source-and-Build.zip`，完整解压后双击根目录的 `build-windows.bat`。这个包包含 C 源码、数据库、编译脚本和已编译的根目录 EXE；`DriverSource-Windows-x64.zip` 仅用于直接运行，不包含完整源码。C 编译器需预先安装或放入便携工具链目录。
+
+0.3.3 的入口立即显示启动提示，每个 C 文件显示独立进度。工具运行期间每 5 秒显示等待提示，每条命令默认最多等待 300 秒，超时仅停止这次启动的工具进程树。全过程记录到 `build/build.log`，双击运行结束后窗口保留，按键关闭。脚本使用 Windows 10/11 自带的 Windows PowerShell 5.1；不会安装编译器，也不修改持久执行策略。
+
+只检查环境可运行 `build-windows.bat --diagnose --no-pause`；自动化可添加 `--no-pause`。显式指定 `mingw` 或 `msvc` 时默认不暂停。若仍编译失败，请查看日志中最后的“失败步骤”和第一条编译错误，不要只依据黑窗判断是否卡住。较慢的电脑可在 PowerShell 中运行 `./scripts/build-windows.ps1 -CommandTimeoutSeconds 900` 增加单条命令等待时间。
+
 
 在 Windows 运行：
 

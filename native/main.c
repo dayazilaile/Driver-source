@@ -29,7 +29,7 @@
 #include "driver_status.h"
 #include "installed_driver.h"
 
-#define APP_VERSION L"0.3.2"
+#define APP_VERSION L"0.3.3"
 #define MAX_UPDATES 4096
 #define EVENT_MESSAGE (WM_APP + 1)
 #define ID_SCAN 101

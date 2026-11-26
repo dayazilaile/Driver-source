@@ -19,9 +19,15 @@ jobs:
           msystem: MINGW64
           update: true
           install: mingw-w64-x86_64-gcc
+      - name: Check build failure, heartbeat and process-tree timeout
+        shell: powershell
+        run: ./tests/test_build_launcher.ps1
       - name: Compile with MinGW-w64
         shell: msys2 {0}
         run: MSYS2_ARG_CONV_EXCL='*' cmd.exe /c build-windows.bat mingw
+      - name: Check extracted source kit with Windows PowerShell 5.1
+        shell: powershell
+        run: ./tests/test_source_kit.ps1 -Toolchain mingw
       - name: Check transfer calculations
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_transfer.c -o build/test_transfer.exe && ./build/test_transfer.exe
@@ -99,6 +105,9 @@ jobs:
             }
             exit $buildExit
           }
+      - name: Check source kit and automatic MSVC initialization
+        shell: powershell
+        run: ./tests/test_source_kit.ps1 -Toolchain msvc
       - name: Check transfer calculations
         shell: cmd
         run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_transfer.c /Fo"build\test_transfer.obj" /Fe"build\test_transfer.exe" && build\test_transfer.exe
@@ -154,8 +163,10 @@ jobs:
           path: |
             dist/DriverSource-Windows-x64.zip
             dist/DriverSource-Windows-x64.zip.sha256
+            dist/DriverSource-Source-and-Build.zip
+            dist/DriverSource-Source-and-Build.zip.sha256
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/DriverSource-Windows-x64.zip dist/DriverSource-Windows-x64.zip.sha256 --title "驱动源 ${{ github.ref_name }} · C 原生版" --notes-file CHANGELOG.md
+        run: gh release create "${{ github.ref_name }}" dist/DriverSource-Windows-x64.zip dist/DriverSource-Windows-x64.zip.sha256 dist/DriverSource-Source-and-Build.zip dist/DriverSource-Source-and-Build.zip.sha256 --title "驱动源 ${{ github.ref_name }} · C 原生版" --notes-file CHANGELOG.md
