@@ -31,6 +31,9 @@ jobs:
       - name: Check transfer calculations
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_transfer.c -o build/test_transfer.exe && ./build/test_transfer.exe
+      - name: Check common physical hardware scope
+        shell: msys2 {0}
+        run: gcc -std=c17 -Wall -Wextra -Werror tests/test_device_scope.c -o build/test_device_scope.exe && ./build/test_device_scope.exe
       - name: Check hardware database matching
         shell: msys2 {0}
         run: gcc -std=c17 -Wall -Wextra -Werror tests/test_device_db.c native/device_db.c -o build/test_device_db.exe && ./build/test_device_db.exe
@@ -111,6 +114,9 @@ jobs:
       - name: Check transfer calculations
         shell: cmd
         run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_transfer.c /Fo"build\test_transfer.obj" /Fe"build\test_transfer.exe" && build\test_transfer.exe
+      - name: Check common physical hardware scope
+        shell: cmd
+        run: cl /nologo /TC /std:c17 /W4 /WX /MT tests\test_device_scope.c /Fo"build\test_device_scope.obj" /Fe"build\test_device_scope.exe" && build\test_device_scope.exe
       - name: Check hardware database matching
         shell: cmd
         run: cl /nologo /TC /std:c17 /utf-8 /W4 /WX /MT /D_CRT_SECURE_NO_WARNINGS tests\test_device_db.c native\device_db.c /Fobuild\ /Fe"build\test_device_db.exe" && build\test_device_db.exe

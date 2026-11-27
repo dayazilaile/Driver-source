@@ -1,6 +1,6 @@
 # 驱动来源核查
 
-核查日期为 2026-11-25。软件收录 51 个候选来源入口。0.3.2 的自动匹配与安装使用本地厂商包目录及独立 HTTPS 下载。
+核查日期为 2026-11-27。软件收录 51 个候选来源入口。0.3.4 的主列表只显示常用物理硬件，下载仍仅使用已核验单设备包及独立 HTTPS；网页入口不视作安装包。新增核显和数位板载荷当前被开发云环境 CONNECT 403 域名规则拦截，尚未接入。
 
 云环境网络白名单拦截厂商域名，已观察到的请求错误为 CONNECT 403。以下入口的实际驱动包可用性和国内下载速度尚未验证。软件提供本机连通性检查，检查结果展示 HTTP 状态或 Windows 网络错误码。
 
@@ -25,7 +25,7 @@
 
 ## 机型驱动包目录
 
-以下三个目录地址在 OSDeploy/OSD 的目录获取实现中有明确引用，包含整机部署驱动包的机型索引。联想、戴尔、惠普目录快照已接入自动整机匹配。下载仍使用源厂商地址，EXE 包仅下载，戴尔 CAB 可提交 INF 匹配安装。惠普按主板 Product ID 和系统版本匹配，商品 SKU 不作为主板编号。
+以下三个目录地址在 OSDeploy/OSD 的目录获取实现中有明确引用，包含整机部署驱动包的机型索引。联想、戴尔、惠普目录快照保留用于识别和来源研究。0.3.4 常用列表不再提供整机包下载；历史底层支持 EXE 仅下载和戴尔 CAB 的 INF 匹配安装。惠普按主板 Product ID 和系统版本匹配，商品 SKU 不作为主板编号。
 
 - 联想目录地址的引用见 [上游代码](https://github.com/OSDeploy/OSD/blob/1bf395f2b673b2874992716a776c0be4a8c98c6e/Private/core-driverpack/Get-OSDCoreDriverPackCatalogLenovo.ps1)。
 - 戴尔目录地址的引用见 [上游代码](https://github.com/OSDeploy/OSD/blob/1bf395f2b673b2874992716a776c0be4a8c98c6e/Private/core-driverpack/Get-OSDCoreDriverPackCatalogDell.ps1)。

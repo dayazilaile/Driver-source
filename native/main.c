@@ -28,8 +28,9 @@
 #include "update_diagnostics.h"
 #include "driver_status.h"
 #include "installed_driver.h"
+#include "device_scope.h"
 
-#define APP_VERSION L"0.3.3"
+#define APP_VERSION L"0.3.4"
 #define MAX_UPDATES 4096
 #define EVENT_MESSAGE (WM_APP + 1)
 #define ID_SCAN 101
@@ -59,6 +60,7 @@ typedef enum { EV_STATUS, EV_HARDWARE, EV_UPDATE, EV_RESET, EV_PROGRESS,
                EV_ITEM_STATUS, EV_SUBMITTED, EV_LOCAL_STATUS, EV_SOURCE_STATUS, EV_DATABASE, EV_DIAGNOSTICS, EV_TRANSFER, EV_DONE, EV_EXIT } EventKind;
 typedef struct {
     WCHAR name[512], hardware[2048], version[128], state[128], package_status[128];
+    WCHAR class_name[128];
     HardwareIdentity identity;
     InstalledDriver driver;
 } Hardware;
@@ -66,6 +68,7 @@ typedef struct {
     WCHAR title[512], hardware[1024], provider[256];
     WCHAR current_version[128], available_version[128], driver_state[128], advice[192], local_inf[128];
     BOOL processed, local_available;
+    DeviceMatch identity;
     int index, device_index;
 } Candidate;
 typedef struct {
@@ -152,7 +155,7 @@ typedef struct {
     BOOL available;
 } LocalReference;
 static LocalReference local_drivers[MAX_UPDATES];
-static size_t local_driver_count, local_package_devices;
+static size_t local_driver_count, local_package_devices, common_devices;
 
 static const WCHAR *advice_text(DriverAdvice advice) {
     switch (advice) {
@@ -171,6 +174,7 @@ static Candidate *device_candidate(const Hardware *hardware, int package_index, 
     Candidate *row = calloc(1, sizeof(*row));
     if (!row) return NULL;
     row->index = package_index;
+    row->identity = hardware->identity.match;
     row->device_index = local_index;
     row->local_available = hardware->driver.local_available;
     StringCchCopyW(row->local_inf, ARRAYSIZE(row->local_inf), hardware->driver.published_inf);
@@ -238,25 +242,6 @@ static void match_oem_package(void) {
     if (oem_match < 0) return;
     const OemPackage *pack = &oem_catalog.packages[oem_match];
     oem_package_as_vendor(pack, &selected_oem);
-    Candidate *row = calloc(1, sizeof(*row));
-    if (!row) { oem_match = -1; return; }
-    WCHAR model[256], release[24], family[24], amount[64];
-    utf8_text(pack->model, model, ARRAYSIZE(model));
-    utf8_text(pack->release, release, ARRAYSIZE(release));
-    utf8_text(pack->os, family, ARRAYSIZE(family));
-    if (pack->bytes) StringCchPrintfW(amount, ARRAYSIZE(amount), L"%.2f GiB", (double)pack->bytes / 1073741824.0);
-    else StringCchCopyW(amount, ARRAYSIZE(amount), L"大小由下载服务器提供");
-    StringCchPrintfW(row->title, ARRAYSIZE(row->title), L"%s 整机驱动包 · %s %s · %s · %s", model,
-        family, release, amount, pack->format == VENDOR_EXE_DOWNLOAD ? L"仅下载，需手动安装" : L"支持 INF 匹配安装");
-    StringCchCopyW(row->provider, ARRAYSIZE(row->provider), !strcmp(pack->manufacturer, "lenovo") ? L"联想官方" : !strcmp(pack->manufacturer, "dell") ? L"戴尔官方" : L"惠普官方");
-    StringCchPrintfW(row->hardware, ARRAYSIZE(row->hardware), L"型号：%s / SKU %s / 主板 %s", computer_model, computer_sku, computer_baseboard);
-    StringCchCopyW(row->driver_state, ARRAYSIZE(row->driver_state), L"整机安装包");
-    StringCchCopyW(row->current_version, ARRAYSIZE(row->current_version), L"各设备分别显示");
-    StringCchCopyW(row->available_version, ARRAYSIZE(row->available_version), L"包内版本待核对");
-    StringCchCopyW(row->advice, ARRAYSIZE(row->advice), pack->format == VENDOR_EXE_DOWNLOAD ? L"整机包仅下载，需手动安装" : L"可下载并提交 INF 匹配安装");
-    row->device_index = -1;
-    row->index = VENDOR_MAX_PACKAGES;
-    emit(EV_UPDATE, row->index, NULL, row);
 }
 
 static const VendorPackage *selected_package(int index) {
@@ -323,13 +308,13 @@ static int match_vendor_device(HDEVINFO set, SP_DEVINFO_DATA *device, Hardware *
                 if (!vendor_package_matches(&vendor_catalog.packages[index], utf8, windows_build, native_x64)) continue;
                 if (match >= 0 && match != (int)index) *ambiguous = TRUE;
                 match = (int)index;
-                if (!vendor_seen[index]) { vendor_seen[index] = TRUE; ++matched_packages; }
+
             }
         }
     }
     StringCchCopyW(hardware->package_status, ARRAYSIZE(hardware->package_status),
         *ambiguous ? L"多个候选包，待核对" : match >= 0 ? L"已匹配单设备安装包" :
-        oem_match >= 0 ? L"已提供整机包，设备内容需解压核对" : L"暂无适用下载源；已安装驱动仍显示");
+        oem_match >= 0 ? L"整机目录有记录，常用列表不下载整机包" : L"暂无适用下载源；已安装驱动仍显示");
     return *ambiguous ? -1 : match;
 }
 
@@ -342,7 +327,7 @@ static void publish_diagnostics(HRESULT error, const WCHAR *step) {
         L"单设备安装包目录 = %zu 项\r\n整机型号/系统目录 = %zu 条\r\n整机 SKU = %s\r\n主板标识 = %s\r\n整机包匹配 = %s\r\n最近步骤 = %s\r\n最近结果 = 0x%08lX\r\n\r\n"
         L"检测使用本机设备硬件 ID；下载使用 HTTPS 厂商发布地址。\r\n"
         L"下载完成核对文件大小和 SHA-256，安装由 Windows 检查签名及设备匹配。\r\n"
-        L"主列表显示已检测设备及已安装版本；只有已匹配包的项目可下载。可从“本机硬件”查看来源建议。\r\n",
+        L"主列表仅显示常用物理硬件；全部设备在“本机硬件”查看。双击常用设备可查看厂商查询入口，入口不等于安装包。\r\n",
         computer_vendor, computer_model, update_process_elevated() ? L"已提权" : L"未提权", windows_build,
         native_x64 ? L"是" : L"否", vendor_catalog.count, oem_catalog.count, computer_sku, computer_baseboard, oem_match >= 0 ? L"已匹配" : L"未匹配", step, (unsigned long)error);
     HRESULT log = append_update_log(app_directory, text);
@@ -369,6 +354,19 @@ static void report_error(const WCHAR *operation, HRESULT error) {
     emit(EV_STATUS, 0, message, NULL);
 }
 
+static BOOL common_hardware(HDEVINFO set, SP_DEVINFO_DATA *device, const Hardware *hardware) {
+    if (device_in_download_scope(hardware->class_name, hardware->hardware,
+            hardware->identity.match.tablet_candidates > 0)) return TRUE;
+    if (hardware->class_name[0] && _wcsicmp(hardware->class_name, L"Unknown") &&
+        _wcsicmp(hardware->class_name,L"Other")) return FALSE;
+    WCHAR ids[8192] = L""; DWORD type = 0;
+    if (!SetupDiGetDeviceRegistryPropertyW(set, device, SPDRP_COMPATIBLEIDS, &type,
+            (BYTE *)ids, sizeof(ids) - 2 * sizeof(WCHAR), NULL) || type != REG_MULTI_SZ) return FALSE;
+    for (const WCHAR *id = ids; *id; id += wcslen(id) + 1)
+        if (missing_device_class_in_scope(hardware->hardware, id)) return TRUE;
+    return FALSE;
+}
+
 static void scan_hardware(const HardwareDatabase *database) {
     HDEVINFO set = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
     SP_DEVINFO_DATA device = { .cbSize = sizeof(device) };
@@ -393,6 +391,8 @@ static void scan_hardware(const HardwareDatabase *database) {
         /* SPDRP_HARDWAREID is MULTI_SZ. Display the most specific first ID. */
         SetupDiGetDeviceRegistryPropertyW(set, &device, SPDRP_HARDWAREID, &type,
                 (BYTE *)row->hardware, sizeof(row->hardware) - sizeof(WCHAR), &bytes);
+        SetupDiGetDeviceRegistryPropertyW(set, &device, SPDRP_CLASS, NULL,
+            (BYTE *)row->class_name, sizeof(row->class_name), NULL);
         installed_driver_read(set, &device, &row->driver);
         StringCchCopyW(row->version, ARRAYSIZE(row->version), row->driver.version);
         if (CM_Get_DevNode_Status(&flags, &problem, device.DevInst, 0) == CR_SUCCESS && (flags & DN_HAS_PROBLEM))
@@ -406,7 +406,12 @@ static void scan_hardware(const HardwareDatabase *database) {
         BOOL ambiguous;
         int package_index = match_vendor_device(set, &device, row, &ambiguous);
         Candidate *candidate = NULL;
-        if (local_driver_count < MAX_UPDATES - 1) {
+        if (common_hardware(set, &device, row) &&
+                local_driver_count < MAX_UPDATES - 1) {
+            ++common_devices;
+            if (package_index >= 0 && !vendor_seen[package_index]) {
+                vendor_seen[package_index] = TRUE; ++matched_packages;
+            }
             int local_index = (int)local_driver_count++;
             LocalReference *reference = &local_drivers[local_index];
             ZeroMemory(reference, sizeof(*reference));
@@ -643,7 +648,7 @@ static DWORD WINAPI worker_main(void *unused) {
         if (task.command == ID_SCAN) {
             emit(EV_RESET, 0, NULL, NULL);
             ZeroMemory(vendor_seen, sizeof(vendor_seen));
-            matched_packages = 0; detected_devices = 0; local_driver_count = 0; local_package_devices = 0;
+            matched_packages = 0; detected_devices = 0; local_driver_count = 0; local_package_devices = 0; common_devices = 0;
             match_oem_package();
             scan_hardware(&database);
             last_error = FAILED(catalog_hr) ? catalog_hr : oem_hr; last_step = L"本机硬件与厂商驱动包匹配";
@@ -654,8 +659,8 @@ static DWORD WINAPI worker_main(void *unused) {
                 if (!native_x64 || windows_build < 17763)
                     StringCchCopyW(message, ARRAYSIZE(message), L"当前安装包目录支持 Windows 10 1809 及以上 x64 系统。其他系统仍可查看硬件与来源建议。");
                 else StringCchPrintfW(message, ARRAYSIZE(message),
-                    L"%s已检测 %zu 个设备及当前驱动，匹配 %zu 个单设备包、%d 个整机包；%zu 个设备有本机第三方驱动包。暂无来源的项目也会显示。",
-                    should_cancel() ? L"扫描已取消。" : L"检测完成。", detected_devices, matched_packages, oem_match >= 0 ? 1 : 0, local_package_devices);
+                    L"%s主列表显示 %zu 个常用硬件，匹配 %zu 个单设备下载包，%zu 个可用本机包；全部 %zu 个设备在“本机硬件”查看。没有来源的设备不会自动下载。",
+                    should_cancel() ? L"扫描已取消。" : L"检测完成。", common_devices, matched_packages, local_package_devices, detected_devices);
                 emit(EV_STATUS, 0, message, NULL);
             }
             publish_diagnostics(last_error, last_step);
@@ -976,21 +981,32 @@ static void render_sources(void) {
 
 static void select_device_sources(void) {
     if (busy) return;
-    int selected = ListView_GetNextItem(hardware_list, -1, LVNI_SELECTED);
-    LVITEMW item = { .mask = LVIF_PARAM, .iItem = selected };
-    if (selected < 0 || !ListView_GetItem(hardware_list, &item)) {
-        MessageBoxW(main_window, L"请先选择一个本机设备。", L"设备来源", MB_OK);
-        return;
+    const DeviceMatch *match = NULL;
+    const WCHAR *name = NULL;
+    if (TabCtrl_GetCurSel(tab_control) == 0) {
+        int selected = ListView_GetNextItem(update_list, -1, LVNI_SELECTED);
+        if (selected >= 0 && selected < candidate_count) {
+            match = &candidates[selected]->identity; name = candidates[selected]->title;
+        }
+    } else {
+        int selected = ListView_GetNextItem(hardware_list, -1, LVNI_SELECTED);
+        LVITEMW item = { .mask = LVIF_PARAM, .iItem = selected };
+        if (selected >= 0 && ListView_GetItem(hardware_list, &item)) {
+            const Hardware *row = (const Hardware *)item.lParam;
+            match = &row->identity.match; name = row->name;
+        }
     }
-    Hardware *row = (Hardware *)item.lParam;
+    if (!match) {
+        MessageBoxW(main_window, L"请先选择一个本机设备。", L"设备来源", MB_OK); return;
+    }
     memset(source_filter, 0, sizeof(source_filter));
-    for (int index = 0; index < row->identity.match.source_count; ++index) {
-        int provider = source_index(row->identity.match.sources[index]);
+    for (int index = 0; index < match->source_count; ++index) {
+        int provider = source_index(match->sources[index]);
         if (provider >= 0) source_filter[provider] = TRUE;
     }
     filtering_sources = TRUE;
     WCHAR text[1024];
-    StringCchPrintfW(text, ARRAYSIZE(text), L"设备来源建议 · %s · %s", row->name, row->identity.basis);
+    StringCchPrintfW(text, ARRAYSIZE(text), L"%s · 厂商查询入口；网页入口不代表已有可下载安装包", name);
     SetWindowTextW(source_context, text);
     render_sources();
     TabCtrl_SetCurSel(tab_control, 2);
@@ -1048,7 +1064,7 @@ static void create_controls(HWND window) {
     ui_font = CreateFontIndirectW(&metrics.lfMessageFont);
     scan_button = control(window, L"BUTTON", L"重新检测并匹配", WS_TABSTOP, ID_SCAN);
     source_box = control(window, WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 0);
-    SendMessageW(source_box, CB_ADDSTRING, 0, (LPARAM)L"厂商官方驱动包 · 自动硬件匹配 · 独立下载");
+    SendMessageW(source_box, CB_ADDSTRING, 0, (LPARAM)L"常用驱动 · 显卡 / 网卡 / 声卡 / 蓝牙 / 数位板 / 数控串口");
     SendMessageW(source_box, CB_SETCURSEL, 0, 0);
     cancel_button = control(window, L"BUTTON", L"取消", WS_TABSTOP, ID_CANCEL);
     tab_control = control(window, WC_TABCONTROLW, L"", WS_TABSTOP, ID_TAB);
@@ -1303,6 +1319,10 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM
         return 0;
     }
     if (message == WM_NOTIFY && ((NMHDR *)lp)->hwndFrom == update_list &&
+        ((NMHDR *)lp)->code == NM_DBLCLK) {
+        select_device_sources(); show_tab(); return 0;
+    }
+    if (message == WM_NOTIFY && ((NMHDR *)lp)->hwndFrom == update_list &&
         ((NMHDR *)lp)->code == LVN_ITEMCHANGING) {
         NMLISTVIEW *change = (NMLISTVIEW *)lp;
         if (change->iItem >= 0 && change->iItem < candidate_count && (change->uChanged & LVIF_STATE) &&
@@ -1424,6 +1444,8 @@ static int inventory_ui_test(void) {
     StringCchCopyW(hardware.hardware, ARRAYSIZE(hardware.hardware), L"PCI\\VEN_1234&DEV_5678");
     StringCchCopyW(hardware.version, ARRAYSIZE(hardware.version), L"31.0.15.5161");
     StringCchCopyW(hardware.driver.provider, ARRAYSIZE(hardware.driver.provider), L"Example provider");
+    hardware.identity.match.source_count = 1;
+    StringCchCopyA(hardware.identity.match.sources[0], 32, "intel");
     Candidate *first = device_candidate(&hardware, -1, FALSE, TRUE, DN_DRIVER_LOADED, 0, 0);
     Event *event = calloc(1, sizeof(*event));
     if (!first || !event) { free(first); free(event); return 20; }
@@ -1452,6 +1474,13 @@ static int inventory_ui_test(void) {
     if (ListView_GetCheckState(update_list, 0) || !ListView_GetCheckState(update_list, 1)) return 29;
     SendMessageW(main_window, WM_COMMAND, ID_ALL, 0);
     if (ListView_GetCheckState(update_list, 1)) return 30;
+    ListView_SetItemState(update_list,0,LVIS_SELECTED,LVIS_SELECTED);
+    select_device_sources(); show_tab();
+    if (TabCtrl_GetCurSel(tab_control) != 2 || ListView_GetItemCount(source_list) != 1) return 31;
+    LVITEMW source = {.mask=LVIF_PARAM,.iItem=0};
+    if (!ListView_GetItem(source_list,&source) || source.lParam != source_index("intel")) return 32;
+    TabCtrl_SetCurSel(tab_control,0); show_tab();
+    filtering_sources = FALSE; render_sources();
     ListView_DeleteAllItems(update_list); clear_candidates(); set_busy(FALSE);
     return 0;
 }
