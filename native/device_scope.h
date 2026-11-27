@@ -23,11 +23,22 @@ static int device_in_download_scope(const wchar_t *class_name, const wchar_t *id
     if (scope_class(class_name, L"MEDIA")) return pci || usb ||
         scope_prefix(id, L"HDAUDIO\\") || scope_prefix(id, L"INTELAUDIO\\");
     if (scope_class(class_name, L"Ports")) return pci || usb || scope_prefix(id, L"FTDIBUS\\");
-    /* Missing USB serial drivers have not acquired the Ports class yet. */
-    return scope_prefix(id, L"USB\\VID_1A86&PID_7523") ||
-        scope_prefix(id, L"USB\\VID_1A86&PID_5523") ||
-        scope_prefix(id, L"USB\\VID_10C4&PID_EA60") ||
-        scope_prefix(id, L"USB\\VID_0403&PID_6001");
+    /* Missing board drivers have not acquired the Ports class yet. */
+    static const wchar_t *const board_ids[] = {
+        L"USB\\VID_1A86&PID_7523", L"USB\\VID_1A86&PID_5523",
+        L"USB\\VID_1A86&PID_55D3", L"USB\\VID_1A86&PID_55D4",
+        L"USB\\VID_10C4&PID_EA60", L"USB\\VID_10C4&PID_EA63",
+        L"USB\\VID_10C4&PID_EA70", L"USB\\VID_10C4&PID_EA71",
+        L"USB\\VID_0403&PID_6001", L"USB\\VID_0403&PID_6010",
+        L"USB\\VID_0403&PID_6011", L"USB\\VID_0403&PID_6014",
+        L"USB\\VID_0403&PID_6015", L"USB\\VID_303A&PID_0002",
+        L"USB\\VID_303A&PID_1001"
+    };
+    for (size_t i = 0; i < sizeof(board_ids)/sizeof(board_ids[0]); ++i) {
+        size_t n = wcslen(board_ids[i]);
+        if (scope_prefix(id, board_ids[i]) && (!id[n] || id[n] == L'&')) return 1;
+    }
+    return 0;
 }
 /* Compatible PCI class IDs remain available before a driver assigns a class. */
 static int missing_device_class_in_scope(const wchar_t *hardware, const wchar_t *compatible) {

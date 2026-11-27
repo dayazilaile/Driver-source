@@ -23,7 +23,6 @@
 #include "driver_backup.h"
 #include "hardware_database.h"
 #include "vendor_catalog.h"
-#include "oem_catalog.h"
 #include "vendor_download.h"
 #include "update_diagnostics.h"
 #include "driver_status.h"
@@ -143,10 +142,6 @@ static WCHAR computer_vendor[128], computer_model[128];
 static BOOL native_x64;
 static size_t matched_packages;
 
-static OemCatalog oem_catalog;
-static char *oem_catalog_text;
-static VendorPackage selected_oem;
-static int oem_match = -1;
 static WCHAR computer_sku[128], computer_baseboard[128];
 static size_t detected_devices;
 
@@ -205,47 +200,7 @@ static Candidate *device_candidate(const Hardware *hardware, int package_index, 
     return row;
 }
 
-static HRESULT load_oem_catalog(void) {
-    WCHAR path[MAX_PATH]; char error[256];
-    HRESULT hr = StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\database\\oem-packages.tsv", app_directory);
-    if (FAILED(hr)) return hr;
-    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (file == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
-    LARGE_INTEGER size;
-    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > 4194304) {
-        CloseHandle(file); return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
-    }
-    oem_catalog_text = malloc((size_t)size.QuadPart + 1);
-    if (!oem_catalog_text) { CloseHandle(file); return E_OUTOFMEMORY; }
-    DWORD received;
-    BOOL ok = ReadFile(file, oem_catalog_text, (DWORD)size.QuadPart, &received, NULL);
-    CloseHandle(file);
-    if (!ok || received != (DWORD)size.QuadPart) return HRESULT_FROM_WIN32(ERROR_READ_FAULT);
-    oem_catalog_text[received] = 0;
-    if (memchr(oem_catalog_text, 0, received)) return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
-    if (!oem_catalog_parse(&oem_catalog, oem_catalog_text, error, sizeof(error))) {
-        WCHAR message[256]; utf8_text(error, message, ARRAYSIZE(message)); append_update_log(app_directory, message);
-        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
-    }
-    return S_OK;
-}
-
-static void match_oem_package(void) {
-    char vendor[512], product[512], sku[512], board[512];
-    oem_match = -1;
-    if (!WideCharToMultiByte(CP_UTF8, 0, computer_vendor, -1, vendor, sizeof(vendor), NULL, NULL) ||
-        !WideCharToMultiByte(CP_UTF8, 0, computer_model, -1, product, sizeof(product), NULL, NULL) ||
-        !WideCharToMultiByte(CP_UTF8, 0, computer_sku, -1, sku, sizeof(sku), NULL, NULL) ||
-        !WideCharToMultiByte(CP_UTF8, 0, computer_baseboard, -1, board, sizeof(board), NULL, NULL)) return;
-    OemMachine machine = {vendor, product, sku, board, windows_build, native_x64};
-    oem_match = oem_catalog_select_machine(&oem_catalog, &machine);
-    if (oem_match < 0) return;
-    const OemPackage *pack = &oem_catalog.packages[oem_match];
-    oem_package_as_vendor(pack, &selected_oem);
-}
-
 static const VendorPackage *selected_package(int index) {
-    if (index == VENDOR_MAX_PACKAGES && oem_match >= 0) return &selected_oem;
     if (index >= 0 && (size_t)index < vendor_catalog.count) return &vendor_catalog.packages[index];
     return NULL;
 }
@@ -314,7 +269,7 @@ static int match_vendor_device(HDEVINFO set, SP_DEVINFO_DATA *device, Hardware *
     }
     StringCchCopyW(hardware->package_status, ARRAYSIZE(hardware->package_status),
         *ambiguous ? L"多个候选包，待核对" : match >= 0 ? L"已匹配单设备安装包" :
-        oem_match >= 0 ? L"整机目录有记录，常用列表不下载整机包" : L"暂无适用下载源；已安装驱动仍显示");
+        L"暂无适用下载源；已安装驱动仍显示");
     return *ambiguous ? -1 : match;
 }
 
@@ -324,12 +279,12 @@ static void publish_diagnostics(HRESULT error, const WCHAR *step) {
     StringCchPrintfW(text, 8192,
         L"驱动源 " APP_VERSION L" · 厂商独立下载模式\r\n"
         L"整机厂商 = %s\r\n整机型号 = %s\r\n进程令牌 = %s\r\nWindows 内部版本 = %u\r\n本机架构符合 x64 安装包 = %s\r\n"
-        L"单设备安装包目录 = %zu 项\r\n整机型号/系统目录 = %zu 条\r\n整机 SKU = %s\r\n主板标识 = %s\r\n整机包匹配 = %s\r\n最近步骤 = %s\r\n最近结果 = 0x%08lX\r\n\r\n"
+        L"单设备安装包目录 = %zu 项\r\n整机 SKU = %s\r\n主板标识 = %s\r\n最近步骤 = %s\r\n最近结果 = 0x%08lX\r\n\r\n"
         L"检测使用本机设备硬件 ID；下载使用 HTTPS 厂商发布地址。\r\n"
         L"下载完成核对文件大小和 SHA-256，安装由 Windows 检查签名及设备匹配。\r\n"
         L"主列表仅显示常用物理硬件；全部设备在“本机硬件”查看。双击常用设备可查看厂商查询入口，入口不等于安装包。\r\n",
         computer_vendor, computer_model, update_process_elevated() ? L"已提权" : L"未提权", windows_build,
-        native_x64 ? L"是" : L"否", vendor_catalog.count, oem_catalog.count, computer_sku, computer_baseboard, oem_match >= 0 ? L"已匹配" : L"未匹配", step, (unsigned long)error);
+        native_x64 ? L"是" : L"否", vendor_catalog.count, computer_sku, computer_baseboard, step, (unsigned long)error);
     HRESULT log = append_update_log(app_directory, text);
     StringCchCatW(text, 8192, SUCCEEDED(log) ? L"\r\n日志位于软件目录 logs\\DriverSource.log" : L"\r\n日志写入失败，可复制当前诊断文本。");
     emit(EV_DIAGNOSTICS, 0, NULL, text);
@@ -518,7 +473,7 @@ static HRESULT download_selected(const Task *task) {
     StringCchPrintfW(text, ARRAYSIZE(text), L"%s下载校验完成 %d 项，已提交匹配安装 %d 项，失败或取消 %d 项，未执行 %d 项。%s",
         should_cancel() ? L"任务已取消。" : L"任务结束。", downloaded_count, submitted_count, failed,
         task->count - successful - failed, reboot ? L"系统要求重启，请保存工作后手动重启。" :
-        L"整机 EXE 包仅保存，不自动运行；安装详情见下载目录日志。");
+        L"安装详情见下载目录日志；驱动当前版本可重新检测查看。");
     emit(EV_STATUS, 0, text, NULL);
     if (should_cancel() && SUCCEEDED(outcome)) outcome = HRESULT_FROM_WIN32(ERROR_CANCELLED);
     return outcome;
@@ -634,8 +589,7 @@ static DWORD WINAPI worker_main(void *unused) {
     HRESULT init = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     detect_platform();
     HRESULT catalog_hr = load_vendor_catalog();
-    HRESULT oem_hr = load_oem_catalog();
-    HRESULT last_error = FAILED(catalog_hr) ? catalog_hr : oem_hr;
+    HRESULT last_error = catalog_hr;
     const WCHAR *last_step = L"加载厂商安装包目录";
     publish_diagnostics(last_error, last_step);
     for (;;) {
@@ -649,12 +603,10 @@ static DWORD WINAPI worker_main(void *unused) {
             emit(EV_RESET, 0, NULL, NULL);
             ZeroMemory(vendor_seen, sizeof(vendor_seen));
             matched_packages = 0; detected_devices = 0; local_driver_count = 0; local_package_devices = 0; common_devices = 0;
-            match_oem_package();
             scan_hardware(&database);
-            last_error = FAILED(catalog_hr) ? catalog_hr : oem_hr; last_step = L"本机硬件与厂商驱动包匹配";
+            last_error = catalog_hr; last_step = L"本机硬件与厂商驱动包匹配";
             if (FAILED(catalog_hr)) report_error(L"加载单设备安装包目录", catalog_hr);
-            if (FAILED(oem_hr)) report_error(L"加载整机驱动包目录", oem_hr);
-            if (SUCCEEDED(catalog_hr) || SUCCEEDED(oem_hr)) {
+            if (SUCCEEDED(catalog_hr)) {
                 WCHAR message[1024];
                 if (!native_x64 || windows_build < 17763)
                     StringCchCopyW(message, ARRAYSIZE(message), L"当前安装包目录支持 Windows 10 1809 及以上 x64 系统。其他系统仍可查看硬件与来源建议。");
@@ -696,7 +648,7 @@ static DWORD WINAPI worker_main(void *unused) {
             }
         } else if (task.command == ID_CHECK_SOURCES) {
             check_sources(&task);
-        } else if (task.command == ID_DOWNLOAD && (SUCCEEDED(catalog_hr) || SUCCEEDED(oem_hr))) {
+        } else if (task.command == ID_DOWNLOAD && (SUCCEEDED(catalog_hr))) {
             last_error = download_selected(&task);
             last_step = L"厂商下载与匹配安装";
             publish_diagnostics(last_error, last_step);
@@ -705,7 +657,6 @@ static DWORD WINAPI worker_main(void *unused) {
     }
     free(vendor_catalog_text);
     vendor_catalog_text = NULL;
-    free(oem_catalog_text); oem_catalog_text = NULL;
     hardware_database_close(&database);
     if (SUCCEEDED(init)) CoUninitialize();
     emit(EV_EXIT, 0, NULL, NULL);
@@ -1508,10 +1459,6 @@ static int window_smoke_test(void) {
     free(vendor_catalog_text); vendor_catalog_text = NULL;
     ZeroMemory(&vendor_catalog, sizeof(vendor_catalog));
     if (!packages_loaded) return 13;
-    HRESULT oem_hr = load_oem_catalog();
-    BOOL oem_loaded = SUCCEEDED(oem_hr) && oem_catalog.count > 3000;
-    free(oem_catalog_text); oem_catalog_text = NULL; ZeroMemory(&oem_catalog, sizeof(oem_catalog));
-    if (!oem_loaded) return 15;
     if (SendMessageW(source_box, CB_GETCOUNT, 0, 0) != 1) return 14;
     if (ListView_GetItemCount(source_list) != (int)ARRAYSIZE(driver_sources)) return 12;
     return inventory_ui_test();

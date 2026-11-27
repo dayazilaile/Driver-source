@@ -20,6 +20,8 @@ int main(void) {
     assert(!device_in_download_scope(L"Bluetooth",L"BTHENUM\\AVRCP",0));
     assert(!device_in_download_scope(L"HIDClass",L"HID\\VID_046D&PID_C52B",0));
     assert(!device_in_download_scope(L"AudioEndpoint",L"SWD\\MMDEVAPI",0));
+    assert(device_in_download_scope(L"USBDevice",L"USB\\VID_303A&PID_1001&MI_02",0));
+    assert(!device_in_download_scope(L"USB",L"USB\\VID_1A86&PID_75230",0));
     assert(!device_in_download_scope(NULL,NULL,0));
     assert(missing_device_class_in_scope(L"PCI\\VEN_8086&DEV_9B41",L"PCI\\CC_030000"));
     assert(missing_device_class_in_scope(L"PCI\\VEN_10EC&DEV_8168",L"PCI\\VEN_10EC&CC_020000"));
